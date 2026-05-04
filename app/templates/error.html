@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title or "Error" }} – DocSearch{% endblock %}
+
+{% block content %}
+<div class="min-h-[60vh] flex items-center justify-center">
+  <div class="text-center max-w-md mx-auto space-y-6 px-4">
+
+    {# ── Status code illustration ──────────────────────────────────────── #}
+    <div class="relative">
+      {% if status_code == 404 %}
+      {# Magnifying glass with question mark #}
+      <svg class="w-24 h-24 mx-auto text-gray-300 dark:text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/>
+      </svg>
+      {% elif status_code == 403 %}
+      {# Lock #}
+      <svg class="w-24 h-24 mx-auto text-yellow-400 dark:text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+      {% elif status_code == 401 %}
+      {# User with X #}
+      <svg class="w-24 h-24 mx-auto text-red-400 dark:text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+      </svg>
+      {% else %}
+      {# Generic warning #}
+      <svg class="w-24 h-24 mx-auto text-red-400 dark:text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+      </svg>
+      {% endif %}
+    </div>
+
+    {# ── Error heading ────────────────────────────────────────────────── #}
+    <div class="space-y-2">
+      <p class="text-6xl font-extrabold tabular-nums
+                {% if status_code == 404 %}text-gray-400 dark:text-gray-600
+                {% elif status_code == 403 %}text-yellow-500 dark:text-yellow-600
+                {% else %}text-red-500 dark:text-red-600{% endif %}">
+        {{ status_code or "Oops" }}
+      </p>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+        {{ title or "Something went wrong" }}
+      </h1>
+      <p class="text-gray-500 dark:text-gray-400 text-sm leading-relaxed">
+        {{ message or "An unexpected error occurred. Please try again." }}
+      </p>
+    </div>
+
+    {# ── Actions ──────────────────────────────────────────────────────── #}
+    <div class="flex items-center justify-center gap-3 flex-wrap">
+
+      {% if status_code == 401 or status_code == 403 %}
+      <a href="/login"
+         class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700
+                text-white font-semibold text-sm shadow-sm transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+        </svg>
+        Sign in
+      </a>
+      {% endif %}
+
+      <a href="/"
+         class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl
+                border border-gray-200 dark:border-gray-700
+                bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700
+                text-gray-700 dark:text-gray-300 font-semibold text-sm transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+        </svg>
+        Go home
+      </a>
+
+      <button
+        type="button"
+        onclick="history.back()"
+        class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl
+               border border-gray-200 dark:border-gray-700
+               bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700
+               text-gray-700 dark:text-gray-300 font-semibold text-sm transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+        </svg>
+        Go back
+      </button>
+
+    </div>
+
+  </div>
+</div>
+{% endblock %}

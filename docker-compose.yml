@@ -1,0 +1,109 @@
+version: "3.9"
+
+services:
+  # ── FastAPI Frontend ────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docsearch-frontend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mount source for live reload in development; comment out for production
+      - ./app:/app/app
+    expose:
+      - "8000"
+    networks:
+      - internal
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Keycloak Identity Provider ──────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: docsearch-keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-keycloak_db_pass}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      # Uncomment for realm import:
+      # KC_IMPORT: /opt/keycloak/data/import/realm-export.json
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      # Uncomment to import realm on first start:
+      # - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    expose:
+      - "8080"
+    networks:
+      - internal
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── PostgreSQL for Keycloak ─────────────────────────────────────────────────
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: docsearch-keycloak-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:-keycloak_db_pass}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Nginx Reverse Proxy ─────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: docsearch-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # Mount TLS certs for production (generate self-signed for dev, see README)
+      - ./certs:/etc/nginx/certs:ro
+      - ./app/static:/var/www/static:ro
+    networks:
+      - internal
+    depends_on:
+      - frontend
+      - keycloak
+
+volumes:
+  postgres-data:
+  keycloak-data:
+
+networks:
+  internal:
+    driver: bridge

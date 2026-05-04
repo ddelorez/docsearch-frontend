@@ -1,0 +1,178 @@
+{#
+  results.html – HTMX partial rendered inside #results-area on index.html.
+  Also renderable as a standalone page (extends base.html only when needed).
+  Received context variables:
+    query       – str
+    results     – list[dict] with keys: title, snippet, source_path, score, date_modified
+    total       – int
+    page        – int
+    page_size   – int
+    total_pages – int
+    error       – str | None
+#}
+
+{% if error %}
+{# ── Error state ────────────────────────────────────────────────────────── #}
+<div class="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-6 flex items-start gap-4">
+  <svg class="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+    <path stroke-linecap="round" stroke-linejoin="round"
+      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+  </svg>
+  <div>
+    <p class="font-semibold text-red-800 dark:text-red-300">Search failed</p>
+    <p class="text-sm text-red-700 dark:text-red-400 mt-1">{{ error }}</p>
+    <button
+      type="button"
+      onclick="document.getElementById('search-input').focus()"
+      class="mt-3 text-sm font-medium text-red-700 dark:text-red-400 underline hover:no-underline"
+    >Try again</button>
+  </div>
+</div>
+
+{% elif results %}
+{# ── Results header ─────────────────────────────────────────────────────── #}
+<div class="space-y-6">
+  <div class="flex items-center justify-between flex-wrap gap-2">
+    <div>
+      <p class="text-sm text-gray-500 dark:text-gray-400">
+        {% if total == 1 %}
+          1 result
+        {% else %}
+          {{ total }} results
+        {% endif %}
+        for
+        <span class="font-semibold text-gray-800 dark:text-gray-200">"{{ query }}"</span>
+      </p>
+    </div>
+    <button
+      type="button"
+      onclick="document.getElementById('search-input').select(); document.getElementById('search-input').focus()"
+      class="text-sm text-brand-600 dark:text-brand-400 hover:underline"
+    >New search</button>
+  </div>
+
+  {# ── Result cards ── #}
+  <div class="space-y-4" id="result-list">
+    {% for doc in results %}
+    <article class="group bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700
+                    shadow-sm hover:shadow-md hover:border-brand-300 dark:hover:border-brand-600
+                    p-5 transition-all duration-150">
+
+      {# Title #}
+      <h2 class="text-base font-semibold text-gray-900 dark:text-white leading-snug mb-1">
+        {{ doc.title }}
+      </h2>
+
+      {# Snippet #}
+      {% if doc.snippet %}
+      <p class="text-sm text-gray-600 dark:text-gray-400 line-clamp-3 mb-3">
+        {{ doc.snippet }}
+      </p>
+      {% endif %}
+
+      {# Meta row #}
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 dark:text-gray-500">
+
+        {# Source path – clickable file:// UNC link #}
+        {% if doc.source_path %}
+        <span class="flex items-center gap-1 min-w-0">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+          </svg>
+          {# file:// link for Windows clients; opens in new tab #}
+          <a
+            href="{{ doc.source_path | unc_to_file_uri }}"
+            target="_blank"
+            rel="noopener"
+            title="{{ doc.source_path }}"
+            class="truncate max-w-xs font-mono hover:text-brand-600 dark:hover:text-brand-400 hover:underline transition-colors"
+          >{{ doc.source_path }}</a>
+        </span>
+        {% endif %}
+
+        {# Relevance score badge #}
+        {% if doc.score %}
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300">
+          <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+          </svg>
+          {{ "%.0f"|format(doc.score * 100) }}% match
+        </span>
+        {% endif %}
+
+        {# Date modified #}
+        {% if doc.date_modified %}
+        <span class="flex items-center gap-1">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          {{ doc.date_modified }}
+        </span>
+        {% endif %}
+
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+
+  {# ── Pagination ── #}
+  {% if total_pages > 1 %}
+  <nav class="flex items-center justify-center gap-2" aria-label="Search pagination">
+
+    {# Previous #}
+    {% if page > 1 %}
+    <button
+      type="button"
+      hx-post="/query"
+      hx-target="#results-area"
+      hx-swap="innerHTML"
+      hx-vals='{"q": "{{ query }}", "page": {{ page - 1 }}, "page_size": {{ page_size }}}'
+      class="px-3 py-1.5 rounded-lg text-sm border border-gray-200 dark:border-gray-700
+             hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+    >&larr; Previous</button>
+    {% endif %}
+
+    {# Page indicator #}
+    <span class="text-sm text-gray-500 dark:text-gray-400 px-3">
+      Page {{ page }} of {{ total_pages }}
+    </span>
+
+    {# Next #}
+    {% if page < total_pages %}
+    <button
+      type="button"
+      hx-post="/query"
+      hx-target="#results-area"
+      hx-swap="innerHTML"
+      hx-vals='{"q": "{{ query }}", "page": {{ page + 1 }}, "page_size": {{ page_size }}}'
+      class="px-3 py-1.5 rounded-lg text-sm border border-gray-200 dark:border-gray-700
+             hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+    >Next &rarr;</button>
+    {% endif %}
+
+  </nav>
+  {% endif %}
+
+</div>
+
+{% else %}
+{# ── Empty results state ─────────────────────────────────────────────────── #}
+<div class="text-center py-16 space-y-4">
+  <svg class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+    <path stroke-linecap="round" stroke-linejoin="round"
+      d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/>
+  </svg>
+  <div>
+    <p class="text-lg font-semibold text-gray-700 dark:text-gray-300">No documents found</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+      No results matched <span class="font-medium">"{{ query }}"</span>.
+      Try different keywords or broaden your search.
+    </p>
+  </div>
+  <button
+    type="button"
+    onclick="document.getElementById('search-input').select(); document.getElementById('search-input').focus()"
+    class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium transition-colors"
+  >Try a new search</button>
+</div>
+{% endif %}

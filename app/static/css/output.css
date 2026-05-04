@@ -1,0 +1,97 @@
+/*
+ * DocSearch – supplemental CSS
+ *
+ * Tailwind CSS is delivered via CDN in base.html (with JIT compilation).
+ * This file contains only styles that cannot be expressed with Tailwind
+ * utility classes directly, such as custom scrollbar theming and
+ * HTMX loading indicator animations.
+ */
+
+/* ── Custom scrollbar (WebKit) ─────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9; /* slate-100 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #94a3b8; /* slate-400 */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b; /* slate-500 */
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b; /* slate-800 */
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569; /* slate-600 */
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #64748b; /* slate-500 */
+}
+
+/* ── HTMX loading indicators ───────────────────────────────────────────── */
+
+/* Spinner that appears when any htmx request is in-flight */
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 200ms ease-in;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+}
+
+/* Pulse animation for skeleton loaders */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+.skeleton {
+  animation: pulse-soft 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  background-color: #e2e8f0; /* slate-200 */
+  border-radius: 4px;
+}
+
+.dark .skeleton {
+  background-color: #334155; /* slate-700 */
+}
+
+/* ── Keyword highlight in search results ───────────────────────────────── */
+mark.highlight {
+  background-color: #fef08a; /* yellow-200 */
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.dark mark.highlight {
+  background-color: #854d0e; /* yellow-800 */
+  color: #fef9c3;            /* yellow-100 */
+}
+
+/* ── Chat bubble styling ───────────────────────────────────────────────── */
+.chat-bubble-user {
+  border-radius: 1rem 1rem 0.25rem 1rem;
+}
+
+.chat-bubble-assistant {
+  border-radius: 1rem 1rem 1rem 0.25rem;
+}
+
+/* ── Focus ring for accessibility ─────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid #3b82f6; /* blue-500 */
+  outline-offset: 2px;
+}

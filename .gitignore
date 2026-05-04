@@ -1,0 +1,41 @@
+# ── Python ───────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+*.log
+
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+*.env.local
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+postgres-data/
+keycloak-data/
+certs/
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Node (just in case) ───────────────────────────────────────────────────────
+node_modules/
