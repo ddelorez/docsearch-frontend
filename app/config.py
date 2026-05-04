@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
 
-from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,7 +49,7 @@ class Settings(BaseSettings):
         return f"{self.oidc_issuer}/.well-known/openid-configuration"
 
     @property
-    def allowed_groups_list(self) -> List[str]:
+    def allowed_groups_list(self) -> list[str]:
         """Return allowed AD groups as a list, ignoring whitespace."""
         if not self.allowed_ad_groups:
             return []

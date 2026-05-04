@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -24,17 +25,17 @@ logger = logging.getLogger(__name__)
 # ── Session helpers ──────────────────────────────────────────────────────────
 
 
-def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+def get_current_user(request: Request) -> dict[str, Any] | None:
     """Return the user dict stored in the session, or None if not logged in."""
-    return request.session.get("user")  # type: ignore[return-value]
+    return request.session.get("user")
 
 
-def get_user_groups(request: Request) -> List[str]:
+def get_user_groups(request: Request) -> list[str]:
     """Return the list of AD groups from the current session."""
-    return request.session.get("groups", [])  # type: ignore[return-value]
+    return request.session.get("groups", [])
 
 
-def extract_ad_groups(userinfo: Dict[str, Any]) -> List[str]:
+def extract_ad_groups(userinfo: dict[str, Any]) -> list[str]:
     """Extract AD groups from an OIDC userinfo or id_token payload.
 
     Keycloak typically maps AD group memberships to a ``groups`` claim.
@@ -59,7 +60,7 @@ def extract_ad_groups(userinfo: Dict[str, Any]) -> List[str]:
     return []
 
 
-def is_group_allowed(groups: List[str], allowed: List[str]) -> bool:
+def is_group_allowed(groups: list[str], allowed: list[str]) -> bool:
     """Return True if *any* of ``groups`` appears in ``allowed``.
 
     If ``allowed`` is empty, all authenticated users are permitted.
@@ -86,7 +87,7 @@ def is_group_allowed(groups: List[str], allowed: List[str]) -> bool:
 # ── Route decorator ──────────────────────────────────────────────────────────
 
 
-def require_auth(func: Callable) -> Callable:  # type: ignore[type-arg]
+def require_auth(func: Callable) -> Callable:
     """Decorator that protects a FastAPI route handler.
 
     Redirects unauthenticated requests to ``/login``.
@@ -124,11 +125,26 @@ def require_auth(func: Callable) -> Callable:  # type: ignore[type-arg]
                     groups,
                     allowed,
                 )
-                # Import here to avoid circular dependency with main.py
-                from fastapi.templating import Jinja2Templates  # noqa: PLC0415
-                import os  # noqa: PLC0415
+                import os as _os  # noqa: PLC0415
+                from datetime import datetime  # noqa: PLC0415
 
-                templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+                from fastapi.templating import Jinja2Templates  # noqa: PLC0415
+
+                templates_dir = _os.path.join(
+                    _os.path.dirname(_os.path.dirname(__file__)), "templates"
+                )
+                templates = Jinja2Templates(directory=templates_dir)
+                return templates.TemplateResponse(
+                    request,
+                    "error.html",
+                    {
+                        "status_code": 403,
+                        "title": "Access Denied",
+                        "message": "Your account does not belong to a group authorised to use DocSearch.",
+                        "current_year": datetime.now().year,
+                    },
+                    status_code=403,
+                )
                 templates = Jinja2Templates(directory=templates_dir)
                 return templates.TemplateResponse(
                     "error.html",

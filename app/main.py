@@ -15,14 +15,18 @@ GET  /health        → Public health check
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -72,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # ── Application factory ───────────────────────────────────────────────────────
 
+
 def create_app() -> FastAPI:
     settings = get_settings()
 
@@ -79,7 +84,7 @@ def create_app() -> FastAPI:
         title="DocSearch",
         description="Internal document search powered by RAG",
         version="1.0.0",
-        docs_url=None,   # disable Swagger UI in production
+        docs_url=None,  # disable Swagger UI in production
         redoc_url=None,
         lifespan=lifespan,
     )
@@ -89,8 +94,8 @@ def create_app() -> FastAPI:
         SessionMiddleware,
         secret_key=settings.secret_key,
         session_cookie="docsearch_session",
-        max_age=28800,        # 8 hours
-        https_only=False,     # set to True in production behind HTTPS
+        max_age=28800,  # 8 hours
+        https_only=False,  # set to True in production behind HTTPS
         same_site="lax",
     )
 
@@ -101,17 +106,15 @@ app = create_app()
 
 # ── Static files & Templates ─────────────────────────────────────────────────
 
-import os as _os  # noqa: E402
-
-_base_dir = _os.path.dirname(__file__)
+_base_dir = os.path.dirname(__file__)
 
 app.mount(
     "/static",
-    StaticFiles(directory=_os.path.join(_base_dir, "static")),
+    StaticFiles(directory=os.path.join(_base_dir, "static")),
     name="static",
 )
 
-templates = Jinja2Templates(directory=_os.path.join(_base_dir, "templates"))
+templates = Jinja2Templates(directory=os.path.join(_base_dir, "templates"))
 
 # Register custom Jinja2 filter for UNC → file:// conversion
 templates.env.filters["unc_to_file_uri"] = unc_to_file_uri
@@ -120,7 +123,7 @@ templates.env.filters["unc_to_file_uri"] = unc_to_file_uri
 # ── Helper ───────────────────────────────────────────────────────────────────
 
 
-def _base_context(request: Request) -> Dict[str, Any]:
+def _base_context(request: Request) -> dict[str, Any]:
     """Return template context variables common to all protected pages."""
     user = get_current_user(request)
     groups = get_user_groups(request)
@@ -128,16 +131,17 @@ def _base_context(request: Request) -> Dict[str, Any]:
         "request": request,
         "user": user,
         "groups": groups,
+        "current_year": datetime.now().year,
     }
 
 
 # ── Public routes ─────────────────────────────────────────────────────────────
 
 
-@app.get("/health", response_class=HTMLResponse)
-async def health(request: Request) -> Dict[str, str]:
+@app.get("/health")
+async def health(request: Request) -> JSONResponse:
     """Liveness probe – always returns 200 OK."""
-    return {"status": "ok"}  # type: ignore[return-value]
+    return JSONResponse({"status": "ok"})
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -147,33 +151,34 @@ async def health(request: Request) -> Dict[str, str]:
 async def login(request: Request) -> RedirectResponse:
     """Redirect to Keycloak's authorisation endpoint."""
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.keycloak.authorize_redirect(request, redirect_uri)  # type: ignore[union-attr]
+    return await oauth.keycloak.authorize_redirect(request, redirect_uri)
 
 
 @app.get("/auth/callback")
-async def auth_callback(request: Request) -> RedirectResponse:
+async def auth_callback(request: Request) -> Response:
     """Handle the OIDC authorisation code callback from Keycloak."""
     try:
-        token = await oauth.keycloak.authorize_access_token(request)  # type: ignore[union-attr]
+        token = await oauth.keycloak.authorize_access_token(request)
     except Exception as exc:
         logger.error("OIDC callback error: %s", exc)
         return templates.TemplateResponse(
+            request,
             "error.html",
             {
-                "request": request,
                 "status_code": 401,
                 "title": "Authentication Failed",
                 "message": "Could not complete sign-in. Please try again.",
+                "current_year": datetime.now().year,
             },
             status_code=401,
-        )  # type: ignore[return-value]
+        )
 
-    userinfo: Dict[str, Any] = token.get("userinfo") or {}
+    userinfo: dict[str, Any] = token.get("userinfo") or {}
     if not userinfo:
         # Fallback: parse id_token claims
         id_token = token.get("id_token")
         if id_token:
-            userinfo = dict(oauth.keycloak.parse_id_token(token, nonce=None) or {})  # type: ignore[union-attr]
+            userinfo = dict(oauth.keycloak.parse_id_token(token, nonce=None) or {})
 
     groups = extract_ad_groups(userinfo)
 
@@ -214,7 +219,7 @@ async def logout(request: Request) -> RedirectResponse:
 async def index(request: Request) -> Any:
     """Search landing page."""
     ctx = _base_context(request)
-    return templates.TemplateResponse("index.html", ctx)
+    return templates.TemplateResponse(request, "index.html", ctx)
 
 
 @app.post("/query", response_class=HTMLResponse)
@@ -245,7 +250,7 @@ async def query(
             "error": result.error,
         }
     )
-    return templates.TemplateResponse("results.html", ctx)
+    return templates.TemplateResponse(request, "results.html", ctx)
 
 
 @app.get("/chat", response_class=HTMLResponse)
@@ -254,7 +259,7 @@ async def chat_page(request: Request) -> Any:
     """Chat mode page (initial load)."""
     ctx = _base_context(request)
     ctx["messages"] = []
-    return templates.TemplateResponse("chat.html", ctx)
+    return templates.TemplateResponse(request, "chat.html", ctx)
 
 
 @app.post("/chat", response_class=HTMLResponse)
@@ -262,15 +267,13 @@ async def chat_page(request: Request) -> Any:
 async def chat_query(
     request: Request,
     question: str = Form(...),
-    history: Optional[str] = Form(None),
+    history: str | None = Form(None),
 ) -> Any:
     """HTMX chat handler – sends question to RAG backend and returns answer partial."""
-    import json
-
     rag: RAGClient = request.app.state.rag
     groups = get_user_groups(request)
 
-    parsed_history: List[ChatMessage] = []
+    parsed_history: list[ChatMessage] = []
     if history:
         try:
             raw = json.loads(history)
@@ -290,7 +293,7 @@ async def chat_query(
             "history": parsed_history,
         }
     )
-    return templates.TemplateResponse("chat.html", ctx)
+    return templates.TemplateResponse(request, "chat.html", ctx)
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────
@@ -299,12 +302,13 @@ async def chat_query(
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: Any) -> Any:
     return templates.TemplateResponse(
+        request,
         "error.html",
         {
-            "request": request,
             "status_code": 404,
             "title": "Page Not Found",
             "message": "The page you requested could not be found.",
+            "current_year": datetime.now().year,
         },
         status_code=404,
     )
@@ -314,12 +318,13 @@ async def not_found_handler(request: Request, exc: Any) -> Any:
 async def server_error_handler(request: Request, exc: Any) -> Any:
     logger.exception("Unhandled server error: %s", exc)
     return templates.TemplateResponse(
+        request,
         "error.html",
         {
-            "request": request,
             "status_code": 500,
             "title": "Internal Server Error",
             "message": "Something went wrong on our end. Please try again later.",
+            "current_year": datetime.now().year,
         },
         status_code=500,
     )

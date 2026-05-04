@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-CONNECT_TIMEOUT = 5.0   # seconds
-READ_TIMEOUT = 30.0     # seconds
+CONNECT_TIMEOUT = 5.0  # seconds
+READ_TIMEOUT = 30.0  # seconds
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 0.5  # seconds – backoff = base * 2^attempt
 
@@ -42,8 +42,8 @@ class SearchResult:
         snippet: str,
         source_path: str,
         score: float = 0.0,
-        date_modified: Optional[str] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        date_modified: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.title = title
         self.snippet = snippet
@@ -53,17 +53,31 @@ class SearchResult:
         self.extra = extra or {}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SearchResult":
+    def from_dict(cls, data: dict[str, Any]) -> SearchResult:
         return cls(
             title=data.get("title", "Untitled"),
             snippet=data.get("snippet", data.get("excerpt", "")),
             source_path=data.get("source_path", data.get("path", "")),
             score=float(data.get("score", data.get("relevance_score", 0.0))),
             date_modified=data.get("date_modified"),
-            extra={k: v for k, v in data.items() if k not in {"title", "snippet", "excerpt", "source_path", "path", "score", "relevance_score", "date_modified"}},
+            extra={
+                k: v
+                for k, v in data.items()
+                if k
+                not in {
+                    "title",
+                    "snippet",
+                    "excerpt",
+                    "source_path",
+                    "path",
+                    "score",
+                    "relevance_score",
+                    "date_modified",
+                }
+            },
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "title": self.title,
             "snippet": self.snippet,
@@ -81,10 +95,10 @@ class RAGResponse:
 
     def __init__(
         self,
-        results: List[SearchResult],
+        results: list[SearchResult],
         total: int,
         query: str,
-        error: Optional[str] = None,
+        error: str | None = None,
     ) -> None:
         self.results = results
         self.total = total
@@ -114,8 +128,8 @@ class ChatResponse:
     def __init__(
         self,
         answer: str,
-        sources: Optional[List[Dict[str, Any]]] = None,
-        error: Optional[str] = None,
+        sources: list[dict[str, Any]] | None = None,
+        error: str | None = None,
     ) -> None:
         self.answer = answer
         self.sources = sources or []
@@ -153,7 +167,7 @@ class RAGClient:
             headers={"Content-Type": "application/json"},
         )
 
-    async def __aenter__(self) -> "RAGClient":
+    async def __aenter__(self) -> RAGClient:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
@@ -167,15 +181,15 @@ class RAGClient:
     async def _post_with_retry(
         self,
         path: str,
-        payload: Dict[str, Any],
-        ad_groups: Optional[List[str]] = None,
+        payload: dict[str, Any],
+        ad_groups: list[str] | None = None,
     ) -> httpx.Response:
         """POST *payload* to *path* with retry on transient errors."""
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if ad_groups:
             headers["X-AD-Groups"] = ",".join(ad_groups)
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
             try:
                 response = await self._client.post(path, json=payload, headers=headers)
@@ -214,7 +228,7 @@ class RAGClient:
         query: str,
         page: int = 1,
         page_size: int = 10,
-        ad_groups: Optional[List[str]] = None,
+        ad_groups: list[str] | None = None,
     ) -> RAGResponse:
         """Forward a keyword/semantic search to the RAG backend.
 
@@ -234,7 +248,7 @@ class RAGClient:
         RAGResponse
             Parsed results, or an error response on failure.
         """
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "query": query,
             "page": page,
             "page_size": page_size,
@@ -259,18 +273,33 @@ class RAGClient:
             )
         except (httpx.ConnectError, httpx.ConnectTimeout):
             logger.error("Cannot connect to RAG backend at %s", get_settings().rag_service_url)
-            return RAGResponse(results=[], total=0, query=query, error="Cannot reach the search service. Please try again later.")
+            return RAGResponse(
+                results=[],
+                total=0,
+                query=query,
+                error="Cannot reach the search service. Please try again later.",
+            )
         except httpx.ReadTimeout:
-            return RAGResponse(results=[], total=0, query=query, error="The search service took too long to respond. Please try again.")
+            return RAGResponse(
+                results=[],
+                total=0,
+                query=query,
+                error="The search service took too long to respond. Please try again.",
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unexpected error querying RAG backend: %s", exc)
-            return RAGResponse(results=[], total=0, query=query, error="An unexpected error occurred. Please try again.")
+            return RAGResponse(
+                results=[],
+                total=0,
+                query=query,
+                error="An unexpected error occurred. Please try again.",
+            )
 
     async def chat(
         self,
         question: str,
-        history: Optional[List[ChatMessage]] = None,
-        ad_groups: Optional[List[str]] = None,
+        history: list[ChatMessage] | None = None,
+        ad_groups: list[str] | None = None,
     ) -> ChatResponse:
         """Send an analytical question to the RAG chat endpoint.
 
@@ -288,7 +317,7 @@ class RAGClient:
         ChatResponse
             The assistant's answer and source citations.
         """
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "question": question,
             "history": [{"role": m.role, "content": m.content} for m in (history or [])],
         }
@@ -304,9 +333,13 @@ class RAGClient:
             logger.error("RAG chat HTTP error: %s", exc)
             return ChatResponse(answer="", error=_http_error_message(exc.response.status_code))
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            return ChatResponse(answer="", error="Cannot reach the search service. Please try again later.")
+            return ChatResponse(
+                answer="", error="Cannot reach the search service. Please try again later."
+            )
         except httpx.ReadTimeout:
-            return ChatResponse(answer="", error="The service took too long to respond. Please try again.")
+            return ChatResponse(
+                answer="", error="The service took too long to respond. Please try again."
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unexpected error in RAG chat: %s", exc)
             return ChatResponse(answer="", error="An unexpected error occurred. Please try again.")
@@ -356,4 +389,5 @@ def unc_to_file_uri(unc_path: str) -> str:
     if not normalised.startswith("//"):
         normalised = "//" + normalised.lstrip("/")
     # file: URIs for UNC paths use four slashes: file:////server/share/...
-    return "file:" + normalised
+    # "file://" + "//server/..." = "file:////server/..."
+    return "file://" + normalised

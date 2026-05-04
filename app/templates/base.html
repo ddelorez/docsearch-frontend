@@ -142,7 +142,7 @@
   {# ── Footer ── #}
   <footer class="mt-auto border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">
-      <span>&copy; {{ "now"|strftime("%Y") if "now"|strftime is defined else "2025" }} Internal Tools. All rights reserved.</span>
+      <span>&copy; {{ current_year | default(2025) }} Internal Tools. All rights reserved.</span>
       <span>DocSearch v1.0.0</span>
     </div>
   </footer>

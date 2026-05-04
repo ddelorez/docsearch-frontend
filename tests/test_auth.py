@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -51,34 +51,49 @@ class TestIsGroupAllowed:
         assert is_group_allowed(groups=["any-group"], allowed=[]) is True
 
     def test_allows_when_user_has_matching_group(self) -> None:
-        assert is_group_allowed(
-            groups=["/docsearch-users"],
-            allowed=["docsearch-users"],
-        ) is True
+        assert (
+            is_group_allowed(
+                groups=["/docsearch-users"],
+                allowed=["docsearch-users"],
+            )
+            is True
+        )
 
     def test_denies_when_user_has_no_matching_group(self) -> None:
-        assert is_group_allowed(
-            groups=["/finance"],
-            allowed=["docsearch-users"],
-        ) is False
+        assert (
+            is_group_allowed(
+                groups=["/finance"],
+                allowed=["docsearch-users"],
+            )
+            is False
+        )
 
     def test_case_insensitive_comparison(self) -> None:
-        assert is_group_allowed(
-            groups=["DocSearch-Users"],
-            allowed=["docsearch-users"],
-        ) is True
+        assert (
+            is_group_allowed(
+                groups=["DocSearch-Users"],
+                allowed=["docsearch-users"],
+            )
+            is True
+        )
 
     def test_leading_slash_stripped(self) -> None:
-        assert is_group_allowed(
-            groups=["/docsearch-users"],
-            allowed=["docsearch-users"],
-        ) is True
+        assert (
+            is_group_allowed(
+                groups=["/docsearch-users"],
+                allowed=["docsearch-users"],
+            )
+            is True
+        )
 
     def test_allows_if_any_group_matches(self) -> None:
-        assert is_group_allowed(
-            groups=["finance", "docsearch-users"],
-            allowed=["docsearch-users"],
-        ) is True
+        assert (
+            is_group_allowed(
+                groups=["finance", "docsearch-users"],
+                allowed=["docsearch-users"],
+            )
+            is True
+        )
 
 
 class TestGetCurrentUser:
@@ -131,8 +146,6 @@ class TestRequireAuth:
 
     @pytest.mark.asyncio
     async def test_calls_handler_when_authenticated(self) -> None:
-        from unittest.mock import patch
-
         request = MagicMock()
         request.session = {
             "user": {"sub": "abc", "name": "Test"},
@@ -147,7 +160,7 @@ class TestRequireAuth:
             return "ok"  # type: ignore[return-value]
 
         # Patch settings to have no allowed groups so group check passes
-        with patch("app.middleware.auth.get_settings") as mock_settings:
+        with patch("app.config.get_settings") as mock_settings:
             mock_settings.return_value.allowed_groups_list = []
             result = await handler(request)
 

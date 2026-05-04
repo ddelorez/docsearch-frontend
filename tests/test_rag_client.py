@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -13,7 +12,6 @@ from app.services.rag_client import (
     SearchResult,
     unc_to_file_uri,
 )
-
 
 # ── SearchResult ──────────────────────────────────────────────────────────────
 
@@ -39,9 +37,9 @@ class TestSearchResult:
     def test_from_dict_alternate_keys(self) -> None:
         data = {
             "title": "Report",
-            "excerpt": "Some text",     # alternate snippet key
+            "excerpt": "Some text",  # alternate snippet key
             "path": r"\\srv\docs\r.docx",  # alternate path key
-            "relevance_score": 0.75,   # alternate score key
+            "relevance_score": 0.75,  # alternate score key
         }
         result = SearchResult.from_dict(data)
         assert result.snippet == "Some text"
@@ -105,7 +103,12 @@ class TestRAGClientSearch:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "results": [
-                {"title": "Doc A", "snippet": "Relevant text", "source_path": r"\\srv\d\a.pdf", "score": 0.9},
+                {
+                    "title": "Doc A",
+                    "snippet": "Relevant text",
+                    "source_path": r"\\srv\d\a.pdf",
+                    "score": 0.9,
+                },
             ],
             "total": 1,
         }

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncGenerator, Generator
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
 
 # Inject required env vars before importing app modules
 os.environ.setdefault("KEYCLOAK_URL", "http://localhost:8080")
@@ -48,13 +47,4 @@ def test_client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def authenticated_session(test_client: TestClient) -> TestClient:
     """Returns a client with a fake authenticated session injected."""
-    # Starlette's TestClient exposes session via cookies dict when
-    # SessionMiddleware is in use. We patch the session directly.
-    test_client.app.state  # ensure app is started
-
-    # We cannot easily set signed cookies externally, so instead we
-    # use a dependency-override approach via a mock user in session.
-    # Tests that need auth should call this fixture, which sets session
-    # state on the test client's cookie jar via a helper endpoint if available,
-    # or mock the session middleware.
     return test_client
