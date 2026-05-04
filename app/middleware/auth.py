@@ -145,17 +145,6 @@ def require_auth(func: Callable) -> Callable:
                     },
                     status_code=403,
                 )
-                templates = Jinja2Templates(directory=templates_dir)
-                return templates.TemplateResponse(
-                    "error.html",
-                    {
-                        "request": request,
-                        "status_code": 403,
-                        "title": "Access Denied",
-                        "message": "Your account does not belong to a group authorised to use DocSearch.",
-                    },
-                    status_code=403,
-                )
 
         return await func(request, *args, **kwargs)
 

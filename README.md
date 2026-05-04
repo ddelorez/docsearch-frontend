@@ -191,8 +191,8 @@ pytest tests/test_auth.py -v
 ruff check app/ tests/
 ruff format --check app/ tests/
 
-# Type check
-mypy app/ --ignore-missing-imports
+# Type check (matches CI flags exactly)
+mypy app/ --ignore-missing-imports --warn-unused-ignores --python-version 3.12
 ```
 
 ---
@@ -230,13 +230,16 @@ As a fallback, the raw UNC path is displayed as copyable plain text beneath each
 
 ---
 
-## AD Group Filtering (Roadmap)
+## AD Group Filtering
 
-Currently, `ALLOWED_AD_GROUPS` gates access at the application level (login check). Planned enhancements:
+`ALLOWED_AD_GROUPS` gates access at the application level (all-or-nothing login check).
 
-1. **Query-level filtering**: pass user groups as `X-AD-Groups` header to the RAG backend, which applies document-level ACL filters.
-2. **Per-result visibility**: hide results the user's groups cannot access.
-3. **Audit logging**: record who searched for what, for compliance.
+Already implemented:
+- **`X-AD-Groups` forwarding**: every `/query` and `/chat` request to the RAG backend includes an `X-AD-Groups: group1,group2` header carrying the authenticated user's groups. The RAG backend can use this to apply document-level ACL filters.
+
+Planned enhancements:
+1. **Per-result visibility**: filter out individual results the user's groups cannot access (requires RAG backend support).
+2. **Audit logging**: record who searched for what, for compliance.
 
 ---
 
