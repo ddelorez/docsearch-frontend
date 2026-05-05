@@ -37,6 +37,11 @@ authentication_backend:
     path: /config/users_database.yml
     password:
       algorithm: argon2
+      iterations: 3
+      memory: 65536
+      parallelism: 4
+      key_length: 32
+      salt_length: 16
 
 identity_providers:
   oidc:

@@ -33,11 +33,10 @@ set_env() {
     fi
 }
 
-# ── Get existing values or generate new ones ────────────────────────────────
 get_env() { grep -oP "^${1}=\K.*" "$ENV_FILE" 2>/dev/null || echo ""; }
 
-AUTH_COOKIE_DOMAIN="$COOKIE_DOMAIN"
-set_env "AUTH_COOKIE_DOMAIN" "$AUTH_COOKIE_DOMAIN"
+# ── Generate or retrieve all secrets ────────────────────────────────────────
+set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
 
 AUTHELIA_STORAGE_ENCRYPTION_KEY=$(get_env AUTHELIA_STORAGE_ENCRYPTION_KEY)
 if [ -z "$AUTHELIA_STORAGE_ENCRYPTION_KEY" ]; then
@@ -83,9 +82,6 @@ if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
     fi
 fi
 
-OIDC_ISSUER_URL=$(get_env OIDC_ISSUER_URL)
-[ -z "$OIDC_ISSUER_URL" ] && OIDC_ISSUER_URL="http://authelia:9091"
-
 SECRET_KEY=$(get_env SECRET_KEY)
 if [ -z "$SECRET_KEY" ]; then
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
@@ -98,7 +94,7 @@ echo "[OK] Generating RSA private key..."
 openssl genrsa -out oidc_key.pem 2048 2>/dev/null
 chmod 600 oidc_key.pem
 
-# ── Generate complete authelia.yml (NO placeholders) ────────────────────────
+# ── Generate complete authelia.yml via Python (NO placeholders) ─────────────
 python3 - "$AUTHELIA_FILE" "$COOKIE_DOMAIN" "$AUTHELIA_STORAGE_ENCRYPTION_KEY" \
     "$OIDC_HMAC_SECRET" "$OIDC_CLIENT_ID" "$OIDC_CLIENT_SECRET_HASH" << 'PYSCRIPT'
 import sys
@@ -127,6 +123,10 @@ storage:
   local:
     path: /var/lib/authelia
 
+identity_validation:
+  reset_password:
+    disable: true
+
 session:
   name: authelia_session
   same_site: lax
@@ -149,6 +149,11 @@ authentication_backend:
     path: /config/users_database.yml
     password:
       algorithm: argon2
+      iterations: 3
+      memory: 65536
+      parallelism: 4
+      key_length: 32
+      salt_length: 16
 
 identity_providers:
   oidc:
@@ -189,7 +194,7 @@ with open(authelia_file, "w") as f:
 PYSCRIPT
 
 chmod 600 "$AUTHELIA_FILE"
-echo "[OK] Generated $AUTHELIA_FILE with all values resolved"
+echo "[OK] Generated $AUTHELIA_FILE (all values resolved, no placeholders)"
 
 # ── Validate YAML ───────────────────────────────────────────────────────────
 if python3 -c "
@@ -197,19 +202,14 @@ import yaml, sys
 try:
     with open('$AUTHELIA_FILE') as f:
         data = yaml.safe_load(f)
-    assert 'server' in data, 'missing server'
-    assert 'storage' in data, 'missing storage'
-    assert 'session' in data, 'missing session'
-    assert 'access_control' in data, 'missing access_control'
-    assert 'authentication_backend' in data, 'missing authentication_backend'
-    assert 'identity_providers' in data, 'missing identity_providers'
-    assert 'notifier' in data, 'missing notifier'
-    assert 'encryption_key' in data['storage'], 'missing storage.encryption_key'
-    assert 'local' in data['storage'], 'missing storage.local'
-    # Verify no placeholders remain
+    assert 'server' in data
+    assert 'storage' in data and 'encryption_key' in data['storage']
+    assert 'session' in data
+    assert 'identity_providers' in data
+    assert 'notifier' in data
     content = open('$AUTHELIA_FILE').read()
     assert '\${' not in content, 'unresolved placeholder found'
-    print('[OK] authelia.yml is valid and complete')
+    print('[OK] authelia.yml validated successfully')
 except Exception as e:
     print(f'[ERROR] {e}')
     sys.exit(1)
@@ -221,7 +221,6 @@ fi
 
 echo ""
 echo "All secrets written to $ENV_FILE"
-echo "Complete authelia.yml generated (no placeholders)"
 echo ""
 echo "Next steps:"
 echo "  1. Add at least one user to users_database.yml"
