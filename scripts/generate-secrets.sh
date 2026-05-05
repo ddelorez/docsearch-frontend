@@ -142,6 +142,16 @@ if [ -z "$SECRET_KEY" ]; then
 fi
 echo "[OK] SECRET_KEY"
 
+# Handle stale directory (Docker bind-mount can create one if file missing)
+if [ -d "oidc_key.pem" ]; then
+    echo "[WARN] oidc_key.pem is a directory (likely Docker bind-mount artifact)"
+    if rmdir oidc_key.pem 2>/dev/null || rm -rf oidc_key.pem 2>/dev/null; then
+        echo "[OK] Removed stale oidc_key.pem directory"
+    else
+        echo "[ERROR] Cannot remove oidc_key.pem directory. Try: sudo rm -rf oidc_key.pem"
+        exit 1
+    fi
+fi
 if [ ! -f "oidc_key.pem" ]; then
     echo "[OK] Generating RSA private key..."
     openssl genrsa -out oidc_key.pem 2048 2>/dev/null
@@ -190,8 +200,21 @@ if errors:
 print("[OK] Pre-flight checks passed")
 PYEOF
 
-# ── Ensure authelia.yml is writable (handle stale 600-mode files from prior runs) ─
-if [ -f "$AUTHELIA_FILE" ]; then
+# ── Ensure authelia.yml is a writable file (handle stale dirs/perms from prior runs) ─
+if [ -d "$AUTHELIA_FILE" ]; then
+    # Docker creates a directory if a bind-mount target file doesn't exist on the host
+    echo "[WARN] $AUTHELIA_FILE is a directory (likely created by Docker bind mount)"
+    OWNER=$(stat -c '%U:%G' "$AUTHELIA_FILE" 2>/dev/null || echo 'unknown')
+    if rmdir "$AUTHELIA_FILE" 2>/dev/null; then
+        echo "[OK] Removed empty directory $AUTHELIA_FILE"
+    elif rm -rf "$AUTHELIA_FILE" 2>/dev/null; then
+        echo "[OK] Removed directory $AUTHELIA_FILE"
+    else
+        echo "[ERROR] Cannot remove directory $AUTHELIA_FILE (owned by: $OWNER)"
+        echo "        Try: sudo rm -rf $AUTHELIA_FILE  (then re-run this script)"
+        exit 1
+    fi
+elif [ -f "$AUTHELIA_FILE" ]; then
     if ! [ -w "$AUTHELIA_FILE" ]; then
         echo "[WARN] $AUTHELIA_FILE is not writable by $(whoami) — attempting to fix permissions"
         if chmod u+w "$AUTHELIA_FILE" 2>/dev/null; then
