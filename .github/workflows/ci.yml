@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m venv .venv
-          .venv/bin/pip install --quiet -r requirements.txt
+          .venv/bin/pip install --quiet -r requirements-dev.txt
 
       - name: mypy
         run: |
@@ -80,7 +80,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m venv .venv
-          .venv/bin/pip install --quiet -r requirements.txt
+          .venv/bin/pip install --quiet -r requirements-dev.txt
 
       - name: Run tests with coverage
         run: |

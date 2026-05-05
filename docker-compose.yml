@@ -28,8 +28,6 @@ services:
     container_name: docsearch-authelia
     restart: unless-stopped
     env_file: .env
-    environment:
-      - X_AUTHELIA_CONFIG=/config/configuration.yml
     volumes:
       - ./authelia.yml:/config/configuration.yml:ro
       - ./users_database.yml:/config/users_database.yml:ro

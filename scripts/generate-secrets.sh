@@ -84,9 +84,13 @@ if [ -z "$SECRET_KEY" ]; then
 fi
 echo "[OK] SECRET_KEY"
 
-echo "[OK] Generating RSA private key..."
-openssl genrsa -out oidc_key.pem 2048 2>/dev/null
-chmod 600 oidc_key.pem
+if [ ! -f "oidc_key.pem" ]; then
+    echo "[OK] Generating RSA private key..."
+    openssl genrsa -out oidc_key.pem 2048 2>/dev/null
+    chmod 600 oidc_key.pem
+else
+    echo "[OK] Reusing existing oidc_key.pem"
+fi
 
 # ── Export all variables needed by the Python block ──────────────────────────
 export COOKIE_DOMAIN

@@ -3,8 +3,7 @@
 # Generate password hashes with:
 #   docker run --rm authelia/authelia authelia crypto hash generate argon2 --password 'your-password'
 #
-# To add a user, uncomment the block below and fill in the fields.
-
+# To add a user, uncomment and fill in the block below.
 # users:
 #   admin:
 #     displayname: "Admin User"
@@ -12,3 +11,5 @@
 #     groups:
 #       - admins
 #       - docsearch-users
+
+users: {}

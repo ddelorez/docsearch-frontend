@@ -3,7 +3,7 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# System dependencies (for httpx/authlib native components if needed)
+# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies inside venv
+# Install runtime Python dependencies only
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
