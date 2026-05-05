@@ -1,0 +1,14 @@
+# Authelia users database for file-based authentication (development only).
+#
+# Generate password hashes with:
+#   docker run --rm authelia/authelia authelia crypto hash generate argon2 --password 'your-password'
+#
+# To add a user, uncomment the block below and fill in the fields.
+
+# users:
+#   admin:
+#     displayname: "Admin User"
+#     password: "$argon2id$v=19$m=65536,t=3,p=1$..." # replace with generated hash
+#     groups:
+#       - admins
+#       - docsearch-users

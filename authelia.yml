@@ -23,6 +23,18 @@ session:
   inactivity: 5m
   remember_me: 1M
 
+# ── Default: file-based users (for development) ───────────────────────────────
+# For production with Active Directory, replace this entire section with the
+# `authentication_backend.ldap` block at the bottom of this file.
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2
+    # Reset the password field for a user after they log in and change their
+    # password so that the new hash is stored in the database.
+    password_reset: false
+
 access_control:
   default_policy: deny
   rules:

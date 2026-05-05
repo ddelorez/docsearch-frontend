@@ -10,8 +10,8 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      # Mount source for live reload in development; comment out for production
-      - ./app:/app/app
+      # Comment out source mount for production (live reload only)
+      # - ./app:/app/app
     expose:
       - "8000"
     networks:
@@ -32,6 +32,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./authelia.yml:/config/configuration.yml:ro
+      - ./users_database.yml:/config/users_database.yml:ro
       - authelia-data:/var/lib/authelia
     expose:
       - "9091"
