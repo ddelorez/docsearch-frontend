@@ -3,6 +3,7 @@ set -euo pipefail
 
 ENV_FILE=".env"
 AUTHELIA_FILE="authelia.yml"
+HASH_FILE=".oidc_client_secret_hash"
 
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
@@ -22,7 +23,19 @@ fi
 set_env() {
     local key="$1" value="$2"
     if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+        # Use python to do the substitution safely (no sed special-char issues)
+        python3 -c "
+import re, sys
+key, value = sys.argv[1], sys.argv[2]
+with open('$ENV_FILE') as f:
+    lines = f.readlines()
+with open('$ENV_FILE', 'w') as f:
+    for line in lines:
+        if line.startswith(key + '='):
+            f.write(f'{key}={value}\n')
+        else:
+            f.write(line)
+" "$key" "$value"
     else
         echo "${key}=${value}" >> "$ENV_FILE"
     fi
@@ -48,12 +61,23 @@ if [ -z "$AUTHELIA_STORAGE_ENCRYPTION_KEY" ]; then
 fi
 echo "[OK] AUTHELIA_STORAGE_ENCRYPTION_KEY"
 
-AUTHELIA_RESET_PASSWORD_JWT_SECRET=$(get_env AUTHELIA_RESET_PASSWORD_JWT_SECRET)
-if [ -z "$AUTHELIA_RESET_PASSWORD_JWT_SECRET" ]; then
-    AUTHELIA_RESET_PASSWORD_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    set_env "AUTHELIA_RESET_PASSWORD_JWT_SECRET" "$AUTHELIA_RESET_PASSWORD_JWT_SECRET"
+# Renamed from AUTHELIA_RESET_PASSWORD_JWT_SECRET — Authelia treats AUTHELIA_*
+# env vars as config overrides, causing "configuration environment variable not
+# expected" warnings.
+RESET_PASSWORD_JWT_SECRET=$(get_env RESET_PASSWORD_JWT_SECRET)
+if [ -z "$RESET_PASSWORD_JWT_SECRET" ]; then
+    # Migrate from old name if present
+    OLD_VAL=$(get_env AUTHELIA_RESET_PASSWORD_JWT_SECRET)
+    if [ -n "$OLD_VAL" ]; then
+        RESET_PASSWORD_JWT_SECRET="$OLD_VAL"
+        # Remove the old key from .env
+        sed -i '/^AUTHELIA_RESET_PASSWORD_JWT_SECRET=/d' "$ENV_FILE"
+    else
+        RESET_PASSWORD_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    fi
+    set_env "RESET_PASSWORD_JWT_SECRET" "$RESET_PASSWORD_JWT_SECRET"
 fi
-echo "[OK] AUTHELIA_RESET_PASSWORD_JWT_SECRET"
+echo "[OK] RESET_PASSWORD_JWT_SECRET"
 
 SESSION_SECRET=$(get_env SESSION_SECRET)
 if [ -z "$SESSION_SECRET" ]; then
@@ -80,34 +104,36 @@ if [ -z "$OIDC_CLIENT_SECRET" ]; then
 fi
 echo "Client secret (save this securely): $OIDC_CLIENT_SECRET"
 
-# Generate BCrypt hash whenever the existing one is missing or invalid
-OIDC_CLIENT_SECRET_HASH=$(get_env OIDC_CLIENT_SECRET_HASH)
-# Validate that the existing hash looks like a real BCrypt hash
-needs_new_hash=false
-if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
-    needs_new_hash=true
-else
-    # Strip $$ escaping and check format
-    raw_check=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
-    if [[ ! "$raw_check" =~ ^\$2[yb]\$ ]]; then
-        echo "[WARN] Existing OIDC_CLIENT_SECRET_HASH is not a valid BCrypt hash; regenerating"
-        needs_new_hash=true
+# Store the BCrypt hash in a separate file (NOT .env) to avoid Docker Compose's
+# variable interpolation, which would expand $KA-like substrings in the hash
+# even with $$ escaping.
+needs_new_hash=true
+if [ -f "$HASH_FILE" ]; then
+    EXISTING_HASH=$(cat "$HASH_FILE")
+    if [[ "$EXISTING_HASH" =~ ^\$2[yb]\$ ]]; then
+        needs_new_hash=false
+    else
+        echo "[WARN] Existing $HASH_FILE is not a valid BCrypt hash; regenerating"
     fi
 fi
+
+# Also clean up any stale OIDC_CLIENT_SECRET_HASH from .env (no longer used)
+sed -i '/^OIDC_CLIENT_SECRET_HASH=/d' "$ENV_FILE" 2>/dev/null || true
+
 if $needs_new_hash; then
     if command -v htpasswd &>/dev/null; then
-        RAW_HASH=$(htpasswd -nbB dummy "$OIDC_CLIENT_SECRET" | cut -d: -f2)
-        # $$ escaping for Docker Compose .env files
-        OIDC_CLIENT_SECRET_HASH=$(printf '%s' "$RAW_HASH" | sed 's/\$/\$\$/g')
-        set_env "OIDC_CLIENT_SECRET_HASH" "$OIDC_CLIENT_SECRET_HASH"
-        echo "[OK] OIDC_CLIENT_SECRET_HASH via htpasswd"
+        htpasswd -nbB dummy "$OIDC_CLIENT_SECRET" | cut -d: -f2 > "$HASH_FILE"
+        chmod 600 "$HASH_FILE"
+        echo "[OK] BCrypt hash written to $HASH_FILE"
     else
         echo "[ERROR] htpasswd required. Install apache2-utils or httpd-tools."
         exit 1
     fi
 else
-    echo "[OK] OIDC_CLIENT_SECRET_HASH (existing valid hash reused)"
+    echo "[OK] $HASH_FILE (existing valid hash reused)"
 fi
+
+OIDC_CLIENT_SECRET_HASH=$(cat "$HASH_FILE")
 
 SECRET_KEY=$(get_env SECRET_KEY)
 if [ -z "$SECRET_KEY" ]; then
@@ -127,25 +153,22 @@ fi
 # ── Export all variables needed by the Python block ──────────────────────────
 export COOKIE_DOMAIN
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
-export AUTHELIA_RESET_PASSWORD_JWT_SECRET
+export RESET_PASSWORD_JWT_SECRET
 export OIDC_HMAC_SECRET
 export OIDC_CLIENT_ID
-# Unescape $$ → $ for YAML (Docker Compose escaping not needed inside authelia.yml)
-OIDC_CLIENT_SECRET_HASH_RAW=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
-export OIDC_CLIENT_SECRET_HASH_RAW
+export OIDC_CLIENT_SECRET_HASH
 
-# ── Pre-flight validation: catch placeholder values BEFORE writing authelia.yml ─
+# ── Pre-flight validation ────────────────────────────────────────────────────
 python3 << 'PYEOF'
-import os
-import sys
+import os, sys
 
 PLACEHOLDER_PREFIX = "changeme-"
 required = {
-    "AUTHELIA_STORAGE_ENCRYPTION_KEY":     os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"],
-    "AUTHELIA_RESET_PASSWORD_JWT_SECRET":  os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"],
-    "OIDC_HMAC_SECRET":                    os.environ["OIDC_HMAC_SECRET"],
-    "OIDC_CLIENT_ID":                      os.environ["OIDC_CLIENT_ID"],
-    "OIDC_CLIENT_SECRET_HASH_RAW":         os.environ["OIDC_CLIENT_SECRET_HASH_RAW"],
+    "AUTHELIA_STORAGE_ENCRYPTION_KEY":  os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"],
+    "RESET_PASSWORD_JWT_SECRET":        os.environ["RESET_PASSWORD_JWT_SECRET"],
+    "OIDC_HMAC_SECRET":                 os.environ["OIDC_HMAC_SECRET"],
+    "OIDC_CLIENT_ID":                   os.environ["OIDC_CLIENT_ID"],
+    "OIDC_CLIENT_SECRET_HASH":          os.environ["OIDC_CLIENT_SECRET_HASH"],
 }
 
 errors = []
@@ -155,10 +178,9 @@ for name, value in required.items():
     elif value.startswith(PLACEHOLDER_PREFIX):
         errors.append(f"  - {name} is still a placeholder ({value!r})")
 
-# BCrypt hash format check
-hash_val = required["OIDC_CLIENT_SECRET_HASH_RAW"]
+hash_val = required["OIDC_CLIENT_SECRET_HASH"]
 if not (hash_val.startswith("$2y$") or hash_val.startswith("$2b$")):
-    errors.append(f"  - OIDC_CLIENT_SECRET_HASH_RAW is not a BCrypt hash (got: {hash_val[:20]!r})")
+    errors.append(f"  - OIDC_CLIENT_SECRET_HASH is not a BCrypt hash (got: {hash_val[:20]!r})")
 
 if errors:
     print("[ERROR] Pre-flight checks failed BEFORE writing authelia.yml:")
@@ -168,20 +190,34 @@ if errors:
 print("[OK] Pre-flight checks passed")
 PYEOF
 
-# ── Generate authelia.yml via PyYAML ─────────────────────────────────────────
+# ── Generate authelia.yml via PyYAML with literal block scalar for RSA key ────
 python3 << 'PYEOF'
 import yaml
 import os
 
+
+class LiteralStr(str):
+    """String type that PyYAML serializes as a literal block scalar (|)."""
+    pass
+
+
+def literal_str_representer(dumper, data):
+    return dumper.represent_scalar(
+        "tag:yaml.org,2002:str", str(data), style="|"
+    )
+
+
+yaml.add_representer(LiteralStr, literal_str_representer)
+
 cookie_domain              = os.environ["COOKIE_DOMAIN"]
 storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
-reset_password_jwt_secret  = os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"]
+reset_password_jwt_secret  = os.environ["RESET_PASSWORD_JWT_SECRET"]
 hmac_secret                = os.environ["OIDC_HMAC_SECRET"]
 client_id                  = os.environ["OIDC_CLIENT_ID"]
-client_secret_hash         = os.environ["OIDC_CLIENT_SECRET_HASH_RAW"]
+client_secret_hash         = os.environ["OIDC_CLIENT_SECRET_HASH"]
 
 with open("oidc_key.pem") as f:
-    rsa_key = f.read().rstrip()
+    rsa_key = f.read().rstrip() + "\n"  # PEM must end with newline
 
 # Always https:// — nginx terminates TLS at 443 with self-signed certs even for dev
 authelia_url            = f"https://{cookie_domain}/authelia/"
@@ -223,7 +259,7 @@ config = {
     "identity_providers": {
         "oidc": {
             "hmac_secret": hmac_secret,
-            "jwks": [{"key": rsa_key}],
+            "jwks": [{"key": LiteralStr(rsa_key)}],
             "enable_client_debug_messages": True,
             "clients": [{
                 "client_id": client_id,
@@ -247,13 +283,17 @@ config = {
 
 with open("authelia.yml", "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False,
-              allow_unicode=True, width=120)
+              allow_unicode=True, width=4096)
 
 # Post-write validation
 with open("authelia.yml") as f:
     verify = yaml.safe_load(f)
 
-assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN")
+key = verify["identity_providers"]["oidc"]["jwks"][0]["key"]
+assert key.startswith("-----BEGIN"), f"PEM header missing: {key[:30]!r}"
+assert key.rstrip().endswith("-----"), f"PEM footer missing: {key[-30:]!r}"
+assert "BEGIN PRIVATE KEY" in key or "BEGIN RSA PRIVATE KEY" in key, \
+    "Not a valid PEM private key"
 assert verify["session"]["cookies"][0]["domain"] == cookie_domain
 assert verify["storage"]["encryption_key"] == storage_key
 assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret
@@ -261,13 +301,15 @@ cookie = verify["session"]["cookies"][0]
 assert cookie["authelia_url"] != cookie["default_redirection_url"]
 assert cookie["authelia_url"].endswith("/authelia/")
 print(f"[OK] authelia.yml generated — authelia_url={cookie['authelia_url']}")
+print(f"[OK] PEM key block scalar: {len(key.splitlines())} lines")
 PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
 
 echo ""
 echo "All secrets written to $ENV_FILE"
-echo "Complete authelia.yml generated (no placeholders, valid YAML)"
+echo "BCrypt hash stored in $HASH_FILE (kept out of .env to avoid Docker Compose issues)"
+echo "Complete authelia.yml generated"
 echo ""
 echo "Next steps:"
 echo "  1. Add at least one user to users_database.yml"

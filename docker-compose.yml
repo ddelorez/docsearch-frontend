@@ -27,7 +27,9 @@ services:
     image: authelia/authelia:latest
     container_name: docsearch-authelia
     restart: unless-stopped
-    env_file: .env
+    # No env_file — all config values are embedded in authelia.yml directly.
+    # Authelia treats AUTHELIA_* env vars as config overrides which causes
+    # "configuration environment variable not expected" warnings.
     volumes:
       - ./authelia.yml:/config/configuration.yml:rw
       - ./users_database.yml:/config/users_database.yml:rw

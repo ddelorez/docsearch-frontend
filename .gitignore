@@ -43,6 +43,7 @@ Thumbs.db
 # ── Authelia ──────────────────────────────────────────────────────────────────
 authelia.yml
 oidc_key.pem
+.oidc_client_secret_hash
 
 # ── Node (just in case) ───────────────────────────────────────────────────────
 node_modules/
