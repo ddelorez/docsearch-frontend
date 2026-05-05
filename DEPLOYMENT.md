@@ -22,7 +22,7 @@ This guide covers deploying DocSearch Frontend on a production server.
 |-----------|---------|
 | Nginx | TLS termination, reverse proxy, static files |
 | FastAPI | Server-rendered UI, OIDC authentication, RAG proxy |
-| Authelia | OIDC identity provider (replaces Keycloak) |
+| Authelia | OIDC identity provider |
 | Redis | Authelia session and cache storage |
 | RAG backend | External document retrieval & chat service |
 
