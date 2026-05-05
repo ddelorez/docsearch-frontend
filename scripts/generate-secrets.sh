@@ -190,6 +190,23 @@ if errors:
 print("[OK] Pre-flight checks passed")
 PYEOF
 
+# ── Ensure authelia.yml is writable (handle stale 600-mode files from prior runs) ─
+if [ -f "$AUTHELIA_FILE" ]; then
+    if ! [ -w "$AUTHELIA_FILE" ]; then
+        echo "[WARN] $AUTHELIA_FILE is not writable by $(whoami) — attempting to fix permissions"
+        if chmod u+w "$AUTHELIA_FILE" 2>/dev/null; then
+            echo "[OK] Fixed permissions on $AUTHELIA_FILE"
+        else
+            # File likely owned by another user (root from prior sudo run, or container)
+            echo "[ERROR] Cannot make $AUTHELIA_FILE writable. Owned by: $(stat -c '%U:%G' "$AUTHELIA_FILE" 2>/dev/null || echo 'unknown')"
+            echo "        Try: sudo rm -f $AUTHELIA_FILE  (then re-run this script)"
+            exit 1
+        fi
+    fi
+    # Remove the existing file so the new one is written with current user's umask
+    rm -f "$AUTHELIA_FILE"
+fi
+
 # ── Generate authelia.yml via PyYAML with literal block scalar for RSA key ────
 python3 << 'PYEOF'
 import yaml
