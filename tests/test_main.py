@@ -45,7 +45,7 @@ class TestProtectedRoutes:
 
 
 class TestLoginRoute:
-    """The /login route should redirect to Keycloak."""
+    """The /login route should redirect to Authelia."""
 
     def test_login_redirects(self, test_client: TestClient) -> None:
         # Authlib will attempt to fetch OIDC discovery doc; mock the redirect.
@@ -53,10 +53,10 @@ class TestLoginRoute:
             mock_client = MagicMock()
             mock_client.authorize_redirect = AsyncMock(
                 return_value=MagicMock(
-                    status_code=302, headers={"location": "http://keycloak/auth"}
+                    status_code=302, headers={"location": "http://authelia/login"}
                 )
             )
-            mock_oauth.keycloak = mock_client
+            mock_oauth.authelia = mock_client
             # Even without mocking, the route exists – just check no unhandled 500
             response = test_client.get("/login", follow_redirects=False)
             # Without a real Keycloak the OAuth lib may return 200, 302, or error
@@ -76,7 +76,7 @@ class TestOIDCCallback:
         with patch("app.main.oauth") as mock_oauth:
             mock_client = MagicMock()
             mock_client.authorize_access_token = AsyncMock(side_effect=Exception("OIDC error"))
-            mock_oauth.keycloak = mock_client
+            mock_oauth.authelia = mock_client
             response = test_client.get("/auth/callback?code=x&state=y")
             assert response.status_code in (200, 401)
 

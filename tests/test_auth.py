@@ -154,14 +154,18 @@ class TestRequireAuth:
 
         called = []
 
-        @require_auth
-        async def handler(req: MagicMock) -> str:
-            called.append(True)
-            return "ok"  # type: ignore[return-value]
-
         # Patch settings to have no allowed groups so group check passes
-        with patch("app.config.get_settings") as mock_settings:
-            mock_settings.return_value.allowed_groups_list = []
+        # Must patch BEFORE applying @require_auth (it does a local import of get_settings)
+        mock_settings = MagicMock()
+        mock_settings.return_value.allowed_groups_list = []
+
+        with patch("app.config.get_settings", mock_settings):
+
+            @require_auth
+            async def handler(req: MagicMock) -> str:
+                called.append(True)
+                return "ok"  # type: ignore[return-value]
+
             result = await handler(request)
 
         assert called == [True]

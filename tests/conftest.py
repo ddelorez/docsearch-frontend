@@ -10,10 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Inject required env vars before importing app modules
-os.environ.setdefault("KEYCLOAK_URL", "http://localhost:8080")
-os.environ.setdefault("KEYCLOAK_REALM", "test")
-os.environ.setdefault("KEYCLOAK_CLIENT_ID", "test-client")
-os.environ.setdefault("KEYCLOAK_CLIENT_SECRET", "test-secret")
+os.environ.setdefault("OIDC_ISSUER_URL", "http://localhost:9091")
+os.environ.setdefault("OIDC_CLIENT_ID", "test-client")
+os.environ.setdefault("OIDC_CLIENT_SECRET", "test-secret")
 os.environ.setdefault("RAG_SERVICE_URL", "http://localhost:9000")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-unit-tests-only")
 os.environ.setdefault("ALLOWED_AD_GROUPS", "")
