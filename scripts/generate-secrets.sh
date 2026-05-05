@@ -113,8 +113,6 @@ export OIDC_CLIENT_SECRET_HASH_RAW
 python3 << 'PYEOF'
 import yaml
 import os
-import ipaddress
-
 cookie_domain              = os.environ["COOKIE_DOMAIN"]
 storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
 reset_password_jwt_secret  = os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"]
@@ -125,21 +123,10 @@ client_secret_hash         = os.environ["OIDC_CLIENT_SECRET_HASH_RAW"]
 with open("oidc_key.pem") as f:
     rsa_key = f.read().rstrip()
 
-# Use http:// for bare IP addresses, https:// for FQDNs
-def get_scheme(domain: str) -> str:
-    try:
-        ipaddress.ip_address(domain)
-        return "http"
-    except ValueError:
-        return "https"
-
-scheme = get_scheme(cookie_domain)
-
-# authelia_url  — where users' browsers reach the Authelia portal (via nginx /authelia/)
-# default_redirection_url — where to send users after authentication (app root)
-authelia_url           = f"{scheme}://{cookie_domain}/authelia/"
-default_redirection_url = f"{scheme}://{cookie_domain}/"
-oidc_callback_url      = f"{scheme}://{cookie_domain}/auth/callback"
+# Always https:// — nginx terminates TLS at 443 with self-signed certs even for dev
+authelia_url            = f"https://{cookie_domain}/authelia/"
+default_redirection_url = f"https://{cookie_domain}/"
+oidc_callback_url       = f"https://{cookie_domain}/auth/callback"
 
 config = {
     "server": {
@@ -209,7 +196,7 @@ config = {
                     oidc_callback_url,
                     "http://localhost:8000/auth/callback"
                 ],
-                "scopes": ["openid", "profile", "email", "groups"],
+                "scopes": ["openid", "offline_access", "profile", "email", "groups"],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "client_secret_basic"
@@ -234,6 +221,10 @@ with open("authelia.yml") as f:
 
 assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN"), \
     "RSA key not correctly embedded"
+# Verify BCrypt hash format ($2y$ or $2b$)
+raw_hash = client_secret_hash.strip()
+assert raw_hash.startswith("$2y$") or raw_hash.startswith("$2b$"), \
+    f"client_secret must be a BCrypt hash (got: {raw_hash[:8]}...)"
 assert verify["session"]["cookies"][0]["domain"] == cookie_domain, \
     "Cookie domain not set correctly"
 assert verify["storage"]["encryption_key"] == storage_key, \
@@ -245,7 +236,7 @@ assert cookie["authelia_url"] != cookie["default_redirection_url"], \
     "authelia_url and default_redirection_url must be different"
 assert cookie["authelia_url"].endswith("/authelia/"), \
     "authelia_url must point to /authelia/ path"
-print(f"[OK] authelia.yml generated — scheme={verify['session']['cookies'][0]['authelia_url'].split('://')[0]}")
+print(f"[OK] authelia.yml generated — authelia_url={verify['session']['cookies'][0]['authelia_url']}")
 print("[OK] authelia.yml validated successfully")
 PYEOF
 

@@ -61,6 +61,7 @@ identity_providers:
           - "http://localhost:8000/auth/callback"
         scopes:
           - openid
+          - offline_access
           - profile
           - email
           - groups
