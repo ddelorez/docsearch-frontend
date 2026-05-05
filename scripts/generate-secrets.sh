@@ -67,6 +67,7 @@ OIDC_CLIENT_SECRET_HASH=$(get_env OIDC_CLIENT_SECRET_HASH)
 if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
     if command -v htpasswd &>/dev/null; then
         RAW_HASH=$(htpasswd -nbB dummy "$OIDC_CLIENT_SECRET" | cut -d: -f2)
+        # $$ is for Docker Compose .env escaping; store that in .env
         OIDC_CLIENT_SECRET_HASH=$(printf '%s' "$RAW_HASH" | sed 's/\$/\$\$/g')
         set_env "OIDC_CLIENT_SECRET_HASH" "$OIDC_CLIENT_SECRET_HASH"
         echo "[OK] OIDC_CLIENT_SECRET_HASH via htpasswd"
@@ -87,16 +88,26 @@ echo "[OK] Generating RSA private key..."
 openssl genrsa -out oidc_key.pem 2048 2>/dev/null
 chmod 600 oidc_key.pem
 
-# Generate authelia.yml using Python's yaml module for correct YAML output
+# ── Export all variables needed by the Python block ──────────────────────────
+export COOKIE_DOMAIN
+export AUTHELIA_STORAGE_ENCRYPTION_KEY
+export OIDC_HMAC_SECRET
+export OIDC_CLIENT_ID
+# The .env value has $$ escaping for Docker Compose — unescape to single $ for YAML
+OIDC_CLIENT_SECRET_HASH_RAW=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
+export OIDC_CLIENT_SECRET_HASH_RAW
+
+# ── Generate authelia.yml via PyYAML ─────────────────────────────────────────
 python3 << 'PYEOF'
 import yaml
 import os
 
-cookie_domain = os.environ["COOKIE_DOMAIN"]
-storage_key = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
-hmac_secret = os.environ["OIDC_HMAC_SECRET"]
-client_id = os.environ["OIDC_CLIENT_ID"]
-client_secret_hash = os.environ["OIDC_CLIENT_SECRET_HASH"]
+cookie_domain    = os.environ["COOKIE_DOMAIN"]
+storage_key      = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
+hmac_secret      = os.environ["OIDC_HMAC_SECRET"]
+client_id        = os.environ["OIDC_CLIENT_ID"]
+# Use the raw (un-escaped) hash for the YAML file
+client_secret_hash = os.environ["OIDC_CLIENT_SECRET_HASH_RAW"]
 
 with open("oidc_key.pem") as f:
     rsa_key = f.read().rstrip()
@@ -185,13 +196,19 @@ config = {
 }
 
 with open("authelia.yml", "w") as f:
-    yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True, width=120)
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False,
+              allow_unicode=True, width=120)
 
-# Verify the output
+# Verify
 with open("authelia.yml") as f:
     verify = yaml.safe_load(f)
-assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN")
-print("[OK] authelia.yml generated with valid YAML (using PyYAML)")
+assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN"), \
+    "RSA key not correctly embedded"
+assert verify["session"]["cookies"][0]["domain"] == cookie_domain, \
+    "Cookie domain not set correctly"
+assert verify["storage"]["encryption_key"] == storage_key, \
+    "Storage encryption key not set correctly"
+print("[OK] authelia.yml generated and validated successfully")
 PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
