@@ -41,6 +41,7 @@ Thumbs.db
 .kilo/agent-manager.json
 
 # ── Authelia ──────────────────────────────────────────────────────────────────
+authelia.yml
 oidc_key.pem
 
 # ── Node (just in case) ───────────────────────────────────────────────────────

@@ -50,7 +50,7 @@ cd /opt/docsearch-frontend
 Verify all required files are present:
 
 ```bash
-ls -la docker-compose.yml authelia.yml users_database.yml nginx.conf .env.example
+ls -la docker-compose.yml authelia.example.yml users_database.yml nginx.conf .env.example
 ```
 
 ---
@@ -96,19 +96,23 @@ pip3 install passlib[bcrypt]
 ```
 
 The script will:
-1. Prompt for your cookie domain (e.g., `docsearch.example.com`)
-2. Generate `AUTH_COOKIE_DOMAIN`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `SESSION_SECRET`, `OIDC_HMAC_SECRET`, `OIDC_CLIENT_SECRET` + BCrypt hash, RSA private key, and `SECRET_KEY`
-3. Write all values to `.env`
-4. Write the RSA key directly into `authelia.yml`
+1. Copy `.env.example` → `.env` and `authelia.example.yml` → `authelia.yml` (if they don't exist)
+2. Prompt for your cookie domain (e.g., `docsearch.example.com` or `127.0.0.1`)
+3. Generate all required secrets and write them to `.env`
+4. Generate a 2048-bit RSA key and embed it directly into `authelia.yml`
+5. Set proper file permissions on `authelia.yml` (chmod 600)
 
 Or generate manually:
 
 ```bash
+# Cookie domain (must be a valid FQDN or IP address)
+# Use your production domain (e.g. docsearch.example.com) or 127.0.0.1 for local
+
 # Authelia storage encryption key (required in v4.38+)
 python3 -c "import secrets; print(secrets.token_hex(32))"
 
-# Cookie domain (must contain a period, e.g. docsearch.example.com)
-# Do NOT use 'localhost' - Authelia requires a valid FQDN for cookies
+# Reset password JWT secret (required in v4.38+)
+python3 -c "import secrets; print(secrets.token_hex(32))"
 
 # OIDC HMAC secret (32+ characters)
 python3 -c "import secrets; print(secrets.token_hex(16))"
@@ -121,10 +125,18 @@ echo "Client Secret: $CLIENT_SECRET"
 pip3 install passlib[bcrypt]
 python3 -c "from passlib.hash import bcrypt; print(bcrypt.hash('$CLIENT_SECRET'))"
 
-# RSA private key for OIDC issuer (2048-bit, saved as file)
+# RSA private key for OIDC issuer (2048-bit, embedded in authelia.yml)
 openssl genrsa -out oidc_key.pem 2048
-chmod 600 oidc_key.pem
-# The key file is mounted directly into the Authelia container
+# Embed the key into authelia.yml (replace __RSA_KEY_PLACEHOLDER__):
+RSA_KEY=$(cat oidc_key.pem | sed 's/^/          /')
+sed -i "s|__RSA_KEY_PLACEHOLDER__|$RSA_KEY|" authelia.yml
+rm oidc_key.pem
+
+# Session secret (64 hex characters)
+python3 -c "import secrets; print(secrets.token_hex(32))"
+
+# FastAPI SECRET_KEY
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 ---
@@ -140,8 +152,9 @@ Fill in the generated values:
 
 | Variable | Description |
 |----------|-------------|
-| `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com`). Must contain a period — `localhost` is not valid. |
+| `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP address. |
 | `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
+| `AUTHELIA_RESET_PASSWORD_JWT_SECRET` | **Required in v4.38+.** 32+ character hex string for signing password reset tokens. |
 | `OIDC_ISSUER_URL` | Internal Authelia URL: `http://authelia:9091` |
 | `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
 | `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
@@ -287,12 +300,12 @@ docker compose logs authelia
 
 Common causes in Authelia v4.38+:
 - **Missing `AUTHELIA_STORAGE_ENCRYPTION_KEY`** — must be a 32+ character hex string in `.env`
-- **Missing `AUTH_COOKIE_DOMAIN`** — must be a valid FQDN with a period (not `localhost`)
-- **No notifier configured** — `authelia.yml` includes `notifier.filesystem` by default
-- **No storage backend** — `authelia.yml` uses `storage.local` by default
-- **Invalid RSA key** — must be a valid PEM file at `oidc_key.pem` in the project root
-- **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using passlib bcrypt
+- **Missing `AUTHELIA_RESET_PASSWORD_JWT_SECRET`** — must be a 32+ character hex string in `.env`
+- **Missing `AUTH_COOKIE_DOMAIN`** — must be a valid FQDN or IP address (not `localhost`)
 - **No `users_database.yml`** — must exist with at least one user (or LDAP configured)
+- **Invalid RSA key** — must be a valid PEM key embedded under `jwks[0].key` in `authelia.yml`
+- **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using passlib bcrypt
+- **No notifier configured** — `authelia.yml` includes `notifier.filesystem` by default
 
 ### Frontend fails to start
 
@@ -332,7 +345,7 @@ To recover:
 2. Re-add users to `users_database.yml`
 3. Restart: `docker compose up -d`
 
-Source files (`authelia.yml`, `users_database.yml`, `.env`) are **not** affected by `docker system prune` since they live on the host filesystem and are tracked by git.
+Source files (`.env`, `authelia.yml`, `users_database.yml`) are **not** affected by `docker system prune` since they live on the host filesystem. Note that `authelia.yml` is gitignored (it contains embedded secrets) — the template `authelia.example.yml` is tracked instead.
 
 ---
 
@@ -347,7 +360,7 @@ docker run --rm -v docsearch-frontend_authelia-data:/data -v $(pwd):/backup alpi
 # Backup Redis data
 docker run --rm -v docsearch-frontend_redis-data:/data -v $(pwd):/backup alpine tar czf /backup/redis-backup.tar.gz -C /data .
 
-# Backup configuration files
+# Backup configuration files (including secrets)
 cp authelia.yml users_database.yml .env nginx.conf /backup/
 ```
 
@@ -370,3 +383,5 @@ git pull
 docker compose pull
 docker compose up -d --remove-orphans
 ```
+
+> **Note:** The `authelia.yml` file contains embedded secrets and is gitignored. After pulling updates, verify your `authelia.yml` still has the correct configuration and re-run `./scripts/generate-secrets.sh` if new secrets are required.

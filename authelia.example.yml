@@ -43,7 +43,7 @@ identity_providers:
     hmac_secret: ${OIDC_HMAC_SECRET}
     jwks:
       - key: |
-          ${AUTHELIA_OIDC_PRIVATE_KEY}
+          __RSA_KEY_PLACEHOLDER__
     enable_client_debug_messages: true
     clients:
       - client_id: ${OIDC_CLIENT_ID}
