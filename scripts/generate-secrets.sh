@@ -10,9 +10,26 @@
 set -euo pipefail
 
 ENV_FILE=".env"
+AUTHELIA_FILE="authelia.yml"
 
-# ── Embedded Authelia template (used if authelia.example.yml is missing) ──
-AUTHELIA_TEMPLATE='---
+echo "Generating secrets for DocSearch Frontend..."
+echo ""
+
+# ── Create .env from example ────────────────────────────────────────────────
+if [ ! -f "$ENV_FILE" ]; then
+    cp .env.example "$ENV_FILE"
+    echo "Created $ENV_FILE from .env.example"
+fi
+
+# ── Create authelia.yml from example or embedded template ───────────────────
+if [ ! -f "$AUTHELIA_FILE" ]; then
+    if [ -f "authelia.example.yml" ]; then
+        cp authelia.example.yml "$AUTHELIA_FILE"
+        echo "Created $AUTHELIA_FILE from authelia.example.yml"
+    else
+        echo "[INFO] authelia.example.yml not found, using embedded template"
+        cat > "$AUTHELIA_FILE" << 'YAML_TEMPLATE'
+---
 server:
   address: tcp://0.0.0.0:9091/
 
@@ -83,56 +100,57 @@ identity_providers:
 notifier:
   disable_startup_check: true
   filesystem:
-    filename: /var/lib/authelia/notification.txt'
-
-echo "Generating secrets for DocSearch Frontend..."
-echo ""
-
-# ── Create .env from example ────────────────────────────────────────────────
-if [ ! -f "$ENV_FILE" ]; then
-    cp .env.example "$ENV_FILE"
-    echo "Created $ENV_FILE from .env.example"
-fi
-
-# ── Create authelia.yml from example or embedded template ───────────────────
-if [ ! -f "authelia.yml" ]; then
-    if [ -f "authelia.example.yml" ]; then
-        cp authelia.example.yml authelia.yml
-        echo "Created authelia.yml from authelia.example.yml"
-    else
-        echo "[WARN] authelia.example.yml not found, using embedded template"
-        echo "$AUTHELIA_TEMPLATE" > authelia.yml
-        echo "Created authelia.yml from embedded template"
+    filename: /var/lib/authelia/notification.txt
+YAML_TEMPLATE
+        echo "Created $AUTHELIA_FILE from embedded template"
     fi
 fi
 
-# ── Validate required sections in authelia.yml ──────────────────────────────
-REQUIRED_SECTIONS=(
-    "server:"
-    "storage:"
-    "session:"
-    "access_control:"
-    "authentication_backend:"
-    "identity_providers:"
-    "notifier:"
-)
+# ── Validate required sections ──────────────────────────────────────────────
+REQUIRED_SECTIONS=("server:" "storage:" "session:" "access_control:" "authentication_backend:" "identity_providers:" "notifier:")
 for section in "${REQUIRED_SECTIONS[@]}"; do
-    if ! grep -q "$section" authelia.yml; then
-        echo "[ERROR] authelia.yml is missing required section: $section"
+    if ! grep -q "$section" "$AUTHELIA_FILE"; then
+        echo "[ERROR] $AUTHELIA_FILE is missing required section: $section"
         exit 1
     fi
 done
-echo "[OK] authelia.yml contains all required sections"
+echo "[OK] $AUTHELIA_FILE contains all required sections"
 
-# ── Validate placeholders match .env.example ────────────────────────────────
-ENV_VARS=$(grep -oP '\$\{[A-Z_]+\}' authelia.yml | sed 's/[${}]//g' | sort -u)
-for var in $ENV_VARS; do
-    if ! grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
-        echo "[ERROR] authelia.yml uses \${$var} but it is not defined in $ENV_FILE"
+# ── Validate YAML syntax ────────────────────────────────────────────────────
+if python3 -c "import yaml; yaml.safe_load(open('$AUTHELIA_FILE'))" 2>/dev/null; then
+    echo "[OK] $AUTHELIA_FILE has valid YAML syntax (pre-key embedding)"
+else
+    # Placeholder causes yaml.safe_load to fail; check structure instead
+    if python3 -c "
+import yaml, sys
+with open('$AUTHELIA_FILE') as f:
+    content = f.read().replace('__RSA_KEY_PLACEHOLDER__', 'dummy')
+try:
+    yaml.safe_load(content)
+    sys.exit(0)
+except yaml.YAMLError as e:
+    print(e)
+    sys.exit(1)
+" 2>/dev/null; then
+        echo "[OK] $AUTHELIA_FILE has valid YAML syntax (pre-key embedding)"
+    else
+        echo "[ERROR] $AUTHELIA_FILE has invalid YAML syntax"
         exit 1
     fi
+fi
+
+# ── Validate placeholders match .env ────────────────────────────────────────
+MISSING_VARS=""
+for var in AUTHELIA_STORAGE_ENCRYPTION_KEY AUTH_COOKIE_DOMAIN OIDC_HMAC_SECRET OIDC_CLIENT_ID OIDC_CLIENT_SECRET_HASH; do
+    if ! grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
+        MISSING_VARS="$MISSING_VARS \${$var}"
+    fi
 done
-echo "[OK] All authelia.yml variables are defined in .env"
+if [ -n "$MISSING_VARS" ]; then
+    echo "[ERROR] $AUTHELIA_FILE uses undefined variables:$MISSING_VARS"
+    exit 1
+fi
+echo "[OK] All $AUTHELIA_FILE variables are defined in .env"
 
 # ── Prompt for cookie domain ────────────────────────────────────────────────
 echo -n "Cookie domain (e.g. docsearch.example.com, or 127.0.0.1 for local): "
@@ -153,7 +171,6 @@ set_env() {
 }
 
 # ── Generate secrets ────────────────────────────────────────────────────────
-
 set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
 echo "[OK] AUTH_COOKIE_DOMAIN=$COOKIE_DOMAIN"
 
@@ -188,19 +205,35 @@ echo "[OK] Generating RSA private key..."
 openssl genrsa -out oidc_key.pem 2048 2>/dev/null
 chmod 600 oidc_key.pem
 
-# Embed the key into authelia.yml using Python (safe for multi-line PEM)
+# Embed the key into authelia.yml using Python
 python3 -c "
 with open('oidc_key.pem') as f:
     key = f.read()
-with open('authelia.yml') as f:
+with open('$AUTHELIA_FILE') as f:
     content = f.read()
 indented_key = '\n'.join('          ' + line for line in key.rstrip().split('\n'))
 content = content.replace('__RSA_KEY_PLACEHOLDER__', indented_key)
-with open('authelia.yml', 'w') as f:
+with open('$AUTHELIA_FILE', 'w') as f:
     f.write(content)
 "
-chmod 600 authelia.yml
-echo "[OK] RSA key saved to oidc_key.pem and embedded into authelia.yml"
+chmod 600 "$AUTHELIA_FILE"
+echo "[OK] RSA key saved to oidc_key.pem and embedded into $AUTHELIA_FILE"
+
+# ── Final YAML validation after key embedding ───────────────────────────────
+if python3 -c "
+import yaml, sys
+try:
+    with open('$AUTHELIA_FILE') as f:
+        yaml.safe_load(f)
+    sys.exit(0)
+except yaml.YAMLError as e:
+    print(f'[ERROR] Invalid YAML after key embedding: {e}')
+    sys.exit(1)
+" 2>/dev/null; then
+    echo "[OK] $AUTHELIA_FILE has valid YAML syntax (post-key embedding)"
+else
+    echo "[WARN] YAML validation skipped (PyYAML not installed)"
+fi
 
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 set_env "SECRET_KEY" "$SECRET_KEY"
@@ -208,7 +241,7 @@ echo "[OK] SECRET_KEY generated"
 
 echo ""
 echo "All secrets written to $ENV_FILE"
-echo "RSA key saved as oidc_key.pem and embedded in authelia.yml"
+echo "RSA key saved as oidc_key.pem and embedded in $AUTHELIA_FILE"
 echo ""
 echo "Next steps:"
 echo "  1. Add at least one user to users_database.yml"
