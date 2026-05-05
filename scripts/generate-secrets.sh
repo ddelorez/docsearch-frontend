@@ -39,6 +39,13 @@ if [ -z "$AUTHELIA_STORAGE_ENCRYPTION_KEY" ]; then
 fi
 echo "[OK] AUTHELIA_STORAGE_ENCRYPTION_KEY"
 
+AUTHELIA_RESET_PASSWORD_JWT_SECRET=$(get_env AUTHELIA_RESET_PASSWORD_JWT_SECRET)
+if [ -z "$AUTHELIA_RESET_PASSWORD_JWT_SECRET" ]; then
+    AUTHELIA_RESET_PASSWORD_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    set_env "AUTHELIA_RESET_PASSWORD_JWT_SECRET" "$AUTHELIA_RESET_PASSWORD_JWT_SECRET"
+fi
+echo "[OK] AUTHELIA_RESET_PASSWORD_JWT_SECRET"
+
 SESSION_SECRET=$(get_env SESSION_SECRET)
 if [ -z "$SESSION_SECRET" ]; then
     SESSION_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
@@ -67,7 +74,7 @@ OIDC_CLIENT_SECRET_HASH=$(get_env OIDC_CLIENT_SECRET_HASH)
 if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
     if command -v htpasswd &>/dev/null; then
         RAW_HASH=$(htpasswd -nbB dummy "$OIDC_CLIENT_SECRET" | cut -d: -f2)
-        # $$ is for Docker Compose .env escaping; store that in .env
+        # $$ escaping for Docker Compose .env files
         OIDC_CLIENT_SECRET_HASH=$(printf '%s' "$RAW_HASH" | sed 's/\$/\$\$/g')
         set_env "OIDC_CLIENT_SECRET_HASH" "$OIDC_CLIENT_SECRET_HASH"
         echo "[OK] OIDC_CLIENT_SECRET_HASH via htpasswd"
@@ -95,9 +102,10 @@ fi
 # ── Export all variables needed by the Python block ──────────────────────────
 export COOKIE_DOMAIN
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
+export AUTHELIA_RESET_PASSWORD_JWT_SECRET
 export OIDC_HMAC_SECRET
 export OIDC_CLIENT_ID
-# The .env value has $$ escaping for Docker Compose — unescape to single $ for YAML
+# Unescape $$ → $ for YAML (Docker Compose escaping not needed inside authelia.yml)
 OIDC_CLIENT_SECRET_HASH_RAW=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
 export OIDC_CLIENT_SECRET_HASH_RAW
 
@@ -105,16 +113,33 @@ export OIDC_CLIENT_SECRET_HASH_RAW
 python3 << 'PYEOF'
 import yaml
 import os
+import ipaddress
 
-cookie_domain    = os.environ["COOKIE_DOMAIN"]
-storage_key      = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
-hmac_secret      = os.environ["OIDC_HMAC_SECRET"]
-client_id        = os.environ["OIDC_CLIENT_ID"]
-# Use the raw (un-escaped) hash for the YAML file
-client_secret_hash = os.environ["OIDC_CLIENT_SECRET_HASH_RAW"]
+cookie_domain              = os.environ["COOKIE_DOMAIN"]
+storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
+reset_password_jwt_secret  = os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"]
+hmac_secret                = os.environ["OIDC_HMAC_SECRET"]
+client_id                  = os.environ["OIDC_CLIENT_ID"]
+client_secret_hash         = os.environ["OIDC_CLIENT_SECRET_HASH_RAW"]
 
 with open("oidc_key.pem") as f:
     rsa_key = f.read().rstrip()
+
+# Use http:// for bare IP addresses, https:// for FQDNs
+def get_scheme(domain: str) -> str:
+    try:
+        ipaddress.ip_address(domain)
+        return "http"
+    except ValueError:
+        return "https"
+
+scheme = get_scheme(cookie_domain)
+
+# authelia_url  — where users' browsers reach the Authelia portal (via nginx /authelia/)
+# default_redirection_url — where to send users after authentication (app root)
+authelia_url           = f"{scheme}://{cookie_domain}/authelia/"
+default_redirection_url = f"{scheme}://{cookie_domain}/"
+oidc_callback_url      = f"{scheme}://{cookie_domain}/auth/callback"
 
 config = {
     "server": {
@@ -132,7 +157,7 @@ config = {
     },
     "identity_validation": {
         "reset_password": {
-            "disable": True
+            "jwt_secret": reset_password_jwt_secret
         }
     },
     "session": {
@@ -143,8 +168,8 @@ config = {
         "remember_me": "1M",
         "cookies": [{
             "domain": cookie_domain,
-            "authelia_url": f"https://{cookie_domain}",
-            "default_redirection_url": f"https://{cookie_domain}"
+            "authelia_url": authelia_url,
+            "default_redirection_url": default_redirection_url
         }]
     },
     "access_control": {
@@ -181,7 +206,7 @@ config = {
                 "public": False,
                 "authorization_policy": "one_factor",
                 "redirect_uris": [
-                    f"https://{cookie_domain}/auth/callback",
+                    oidc_callback_url,
                     "http://localhost:8000/auth/callback"
                 ],
                 "scopes": ["openid", "profile", "email", "groups"],
@@ -203,16 +228,25 @@ with open("authelia.yml", "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False,
               allow_unicode=True, width=120)
 
-# Verify
+# Verify output
 with open("authelia.yml") as f:
     verify = yaml.safe_load(f)
+
 assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN"), \
     "RSA key not correctly embedded"
 assert verify["session"]["cookies"][0]["domain"] == cookie_domain, \
     "Cookie domain not set correctly"
 assert verify["storage"]["encryption_key"] == storage_key, \
     "Storage encryption key not set correctly"
-print("[OK] authelia.yml generated and validated successfully")
+assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret, \
+    "Reset password JWT secret not set correctly"
+cookie = verify["session"]["cookies"][0]
+assert cookie["authelia_url"] != cookie["default_redirection_url"], \
+    "authelia_url and default_redirection_url must be different"
+assert cookie["authelia_url"].endswith("/authelia/"), \
+    "authelia_url must point to /authelia/ path"
+print(f"[OK] authelia.yml generated — scheme={verify['session']['cookies'][0]['authelia_url'].split('://')[0]}")
+print("[OK] authelia.yml validated successfully")
 PYEOF
 
 chmod 600 "$AUTHELIA_FILE"

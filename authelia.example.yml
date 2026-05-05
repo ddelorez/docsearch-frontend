@@ -13,7 +13,7 @@ storage:
 
 identity_validation:
   reset_password:
-    disable: true
+    jwt_secret: ${AUTHELIA_RESET_PASSWORD_JWT_SECRET}
 
 session:
   name: authelia_session
@@ -23,8 +23,8 @@ session:
   remember_me: 1M
   cookies:
     - domain: ${AUTH_COOKIE_DOMAIN}
-      authelia_url: https://${AUTH_COOKIE_DOMAIN}
-      default_redirection_url: https://${AUTH_COOKIE_DOMAIN}
+      authelia_url: https://${AUTH_COOKIE_DOMAIN}/authelia/
+      default_redirection_url: https://${AUTH_COOKIE_DOMAIN}/
 
 access_control:
   default_policy: deny
