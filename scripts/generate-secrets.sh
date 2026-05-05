@@ -77,10 +77,18 @@ fi
 # 6. RSA private key for OIDC issuer (embedded directly into authelia.yml)
 echo "[OK] Generating RSA private key..."
 openssl genrsa -out _oidc_key_tmp.pem 2048 2>/dev/null
-# Read the key and indent each line with 10 spaces (to match YAML block scalar indentation)
-RSA_KEY=$(cat _oidc_key_tmp.pem | sed 's/^/          /')
-# Replace the placeholder in authelia.yml
-sed -i "s|__RSA_KEY_PLACEHOLDER__|$RSA_KEY|" authelia.yml
+# Use Python to safely embed the multi-line PEM key into authelia.yml
+python3 -c "
+with open('_oidc_key_tmp.pem') as f:
+    key = f.read()
+with open('authelia.yml') as f:
+    content = f.read()
+# Indent each line of the key to match YAML block scalar indentation
+indented_key = '\n'.join('          ' + line for line in key.rstrip().split('\n'))
+content = content.replace('__RSA_KEY_PLACEHOLDER__', indented_key)
+with open('authelia.yml', 'w') as f:
+    f.write(content)
+"
 rm -f _oidc_key_tmp.pem
 chmod 600 authelia.yml
 echo "[OK] RSA key embedded into authelia.yml"
