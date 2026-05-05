@@ -33,6 +33,7 @@ services:
     volumes:
       - ./authelia.yml:/config/configuration.yml:ro
       - ./users_database.yml:/config/users_database.yml:ro
+      - ./oidc_key.pem:/config/oidc_key.pem:ro
       - authelia-data:/var/lib/authelia
     expose:
       - "9091"

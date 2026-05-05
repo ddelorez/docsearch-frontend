@@ -42,8 +42,7 @@ identity_providers:
   oidc:
     hmac_secret: ${OIDC_HMAC_SECRET}
     jwks:
-      - key: |
-          ${OIDC_ISSUER_PRIVATE_KEY}
+      - key_path: /config/oidc_key.pem
     enable_client_debug_messages: true
     clients:
       - client_id: ${OIDC_CLIENT_ID}

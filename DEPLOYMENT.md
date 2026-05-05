@@ -121,17 +121,10 @@ echo "Client Secret: $CLIENT_SECRET"
 pip3 install passlib[bcrypt]
 python3 -c "from passlib.hash import bcrypt; print(bcrypt.hash('$CLIENT_SECRET'))"
 
-# RSA private key for OIDC issuer (2048-bit, indented with 2 spaces)
-openssl genrsa -out authelia_key.pem 2048
-echo "RSA Key (copy exactly, with indentation):"
-cat authelia_key.pem | awk '{print "  "$0}'
-rm authelia_key.pem
-
-# Session secret (64 hex characters)
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
-# FastAPI SECRET_KEY
-python3 -c "import secrets; print(secrets.token_hex(32))"
+# RSA private key for OIDC issuer (2048-bit, saved as file)
+openssl genrsa -out oidc_key.pem 2048
+chmod 600 oidc_key.pem
+# The key file is mounted directly into the Authelia container
 ```
 
 ---
@@ -155,7 +148,6 @@ Fill in the generated values:
 | `OIDC_CLIENT_SECRET_HASH` | BCrypt hash of `OIDC_CLIENT_SECRET` |
 | `SESSION_SECRET` | 64 hex character session secret |
 | `OIDC_HMAC_SECRET` | 32+ character HMAC secret |
-| `OIDC_ISSUER_PRIVATE_KEY` | RSA private key (written to `authelia.yml` by the script) |
 | `SECRET_KEY` | FastAPI session signing key (random hex) |
 | `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
 | `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
@@ -298,7 +290,7 @@ Common causes in Authelia v4.38+:
 - **Missing `AUTH_COOKIE_DOMAIN`** — must be a valid FQDN with a period (not `localhost`)
 - **No notifier configured** — `authelia.yml` includes `notifier.filesystem` by default
 - **No storage backend** — `authelia.yml` uses `storage.local` by default
-- **Invalid RSA key** — must be a PEM key indented with 2 spaces under `jwks[0].key`
+- **Invalid RSA key** — must be a valid PEM file at `oidc_key.pem` in the project root
 - **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using passlib bcrypt
 - **No `users_database.yml`** — must exist with at least one user (or LDAP configured)
 

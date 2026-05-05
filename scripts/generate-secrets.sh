@@ -63,20 +63,11 @@ else
     echo "  And set OIDC_CLIENT_SECRET_HASH in .env manually"
 fi
 
-# 5. RSA private key for OIDC issuer
+# 5. RSA private key for OIDC issuer (saved as file, not env var)
 echo "[OK] Generating RSA private key..."
-openssl genrsa -out authelia_key.pem 2048 2>/dev/null
-RSA_KEY=$(cat authelia_key.pem | awk '{printf "  %s\n", $0}')
-# Replace the placeholder in authelia.yml
-if grep -q "changeme-generate-rsa-private-key" authelia.yml 2>/dev/null; then
-    sed -i "s|  changeme-generate-rsa-private-key|$RSA_KEY|" authelia.yml
-    sed -i "s|^OIDC_ISSUER_PRIVATE_KEY=.*|OIDC_ISSUER_PRIVATE_KEY=**SET_IN_AUTHLIA_YML**|" "$ENV_FILE"
-    echo "[OK] RSA key written to authelia.yml"
-else
-    echo "[INFO] RSA key generated. Add it to authelia.yml under jwks[0].key:"
-    echo "$RSA_KEY"
-fi
-rm -f authelia_key.pem
+openssl genrsa -out oidc_key.pem 2048 2>/dev/null
+chmod 600 oidc_key.pem
+echo "[OK] RSA key saved to oidc_key.pem (mounted into Authelia container)"
 
 # 6. SECRET_KEY for FastAPI
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")

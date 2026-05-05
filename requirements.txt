@@ -15,3 +15,6 @@ mypy==1.14.0
 pytest==8.3.4
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
+
+# ── Secret generation (deploy only, not needed at runtime) ────────────────────
+# pip3 install passlib[bcrypt]   # used by scripts/generate-secrets.sh only
