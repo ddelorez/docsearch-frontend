@@ -28,7 +28,16 @@ set_env() {
     fi
 }
 
-get_env() { grep -oP "^${1}=\K.*" "$ENV_FILE" 2>/dev/null || echo ""; }
+# Returns the value from .env, or empty string if missing OR a "changeme-*" placeholder
+get_env() {
+    local val
+    val=$(grep -oP "^${1}=\K.*" "$ENV_FILE" 2>/dev/null || echo "")
+    if [[ "$val" == changeme-* ]]; then
+        echo ""
+    else
+        echo "$val"
+    fi
+}
 
 set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
 
@@ -62,6 +71,7 @@ echo "[OK] OIDC_HMAC_SECRET"
 
 OIDC_CLIENT_ID=$(get_env OIDC_CLIENT_ID)
 [ -z "$OIDC_CLIENT_ID" ] && OIDC_CLIENT_ID="docsearch-frontend"
+set_env "OIDC_CLIENT_ID" "$OIDC_CLIENT_ID"
 
 OIDC_CLIENT_SECRET=$(get_env OIDC_CLIENT_SECRET)
 if [ -z "$OIDC_CLIENT_SECRET" ]; then
@@ -70,8 +80,21 @@ if [ -z "$OIDC_CLIENT_SECRET" ]; then
 fi
 echo "Client secret (save this securely): $OIDC_CLIENT_SECRET"
 
+# Generate BCrypt hash whenever the existing one is missing or invalid
 OIDC_CLIENT_SECRET_HASH=$(get_env OIDC_CLIENT_SECRET_HASH)
+# Validate that the existing hash looks like a real BCrypt hash
+needs_new_hash=false
 if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
+    needs_new_hash=true
+else
+    # Strip $$ escaping and check format
+    raw_check=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
+    if [[ ! "$raw_check" =~ ^\$2[yb]\$ ]]; then
+        echo "[WARN] Existing OIDC_CLIENT_SECRET_HASH is not a valid BCrypt hash; regenerating"
+        needs_new_hash=true
+    fi
+fi
+if $needs_new_hash; then
     if command -v htpasswd &>/dev/null; then
         RAW_HASH=$(htpasswd -nbB dummy "$OIDC_CLIENT_SECRET" | cut -d: -f2)
         # $$ escaping for Docker Compose .env files
@@ -82,6 +105,8 @@ if [ -z "$OIDC_CLIENT_SECRET_HASH" ]; then
         echo "[ERROR] htpasswd required. Install apache2-utils or httpd-tools."
         exit 1
     fi
+else
+    echo "[OK] OIDC_CLIENT_SECRET_HASH (existing valid hash reused)"
 fi
 
 SECRET_KEY=$(get_env SECRET_KEY)
@@ -109,10 +134,45 @@ export OIDC_CLIENT_ID
 OIDC_CLIENT_SECRET_HASH_RAW=$(printf '%s' "$OIDC_CLIENT_SECRET_HASH" | sed 's/\$\$/\$/g')
 export OIDC_CLIENT_SECRET_HASH_RAW
 
+# ── Pre-flight validation: catch placeholder values BEFORE writing authelia.yml ─
+python3 << 'PYEOF'
+import os
+import sys
+
+PLACEHOLDER_PREFIX = "changeme-"
+required = {
+    "AUTHELIA_STORAGE_ENCRYPTION_KEY":     os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"],
+    "AUTHELIA_RESET_PASSWORD_JWT_SECRET":  os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"],
+    "OIDC_HMAC_SECRET":                    os.environ["OIDC_HMAC_SECRET"],
+    "OIDC_CLIENT_ID":                      os.environ["OIDC_CLIENT_ID"],
+    "OIDC_CLIENT_SECRET_HASH_RAW":         os.environ["OIDC_CLIENT_SECRET_HASH_RAW"],
+}
+
+errors = []
+for name, value in required.items():
+    if not value:
+        errors.append(f"  - {name} is empty")
+    elif value.startswith(PLACEHOLDER_PREFIX):
+        errors.append(f"  - {name} is still a placeholder ({value!r})")
+
+# BCrypt hash format check
+hash_val = required["OIDC_CLIENT_SECRET_HASH_RAW"]
+if not (hash_val.startswith("$2y$") or hash_val.startswith("$2b$")):
+    errors.append(f"  - OIDC_CLIENT_SECRET_HASH_RAW is not a BCrypt hash (got: {hash_val[:20]!r})")
+
+if errors:
+    print("[ERROR] Pre-flight checks failed BEFORE writing authelia.yml:")
+    for e in errors:
+        print(e)
+    sys.exit(1)
+print("[OK] Pre-flight checks passed")
+PYEOF
+
 # ── Generate authelia.yml via PyYAML ─────────────────────────────────────────
 python3 << 'PYEOF'
 import yaml
 import os
+
 cookie_domain              = os.environ["COOKIE_DOMAIN"]
 storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
 reset_password_jwt_secret  = os.environ["AUTHELIA_RESET_PASSWORD_JWT_SECRET"]
@@ -129,24 +189,11 @@ default_redirection_url = f"https://{cookie_domain}/"
 oidc_callback_url       = f"https://{cookie_domain}/auth/callback"
 
 config = {
-    "server": {
-        "address": "tcp://0.0.0.0:9091/"
-    },
-    "log": {
-        "level": "info",
-        "format": "text"
-    },
-    "storage": {
-        "encryption_key": storage_key,
-        "local": {
-            "path": "/var/lib/authelia"
-        }
-    },
-    "identity_validation": {
-        "reset_password": {
-            "jwt_secret": reset_password_jwt_secret
-        }
-    },
+    "server":                 {"address": "tcp://0.0.0.0:9091/"},
+    "log":                    {"level": "info", "format": "text"},
+    "storage":                {"encryption_key": storage_key,
+                               "local": {"path": "/var/lib/authelia"}},
+    "identity_validation":    {"reset_password": {"jwt_secret": reset_password_jwt_secret}},
     "session": {
         "name": "authelia_session",
         "same_site": "lax",
@@ -156,35 +203,27 @@ config = {
         "cookies": [{
             "domain": cookie_domain,
             "authelia_url": authelia_url,
-            "default_redirection_url": default_redirection_url
-        }]
+            "default_redirection_url": default_redirection_url,
+        }],
     },
     "access_control": {
         "default_policy": "deny",
-        "rules": [{
-            "domain": "*",
-            "policy": "one_factor"
-        }]
+        "rules": [{"domain": "*", "policy": "one_factor"}],
     },
     "authentication_backend": {
         "file": {
             "path": "/config/users_database.yml",
             "password": {
                 "algorithm": "argon2",
-                "iterations": 3,
-                "memory": 65536,
-                "parallelism": 4,
-                "key_length": 32,
-                "salt_length": 16
-            }
-        }
+                "iterations": 3, "memory": 65536, "parallelism": 4,
+                "key_length": 32, "salt_length": 16,
+            },
+        },
     },
     "identity_providers": {
         "oidc": {
             "hmac_secret": hmac_secret,
-            "jwks": [{
-                "key": rsa_key
-            }],
+            "jwks": [{"key": rsa_key}],
             "enable_client_debug_messages": True,
             "clients": [{
                 "client_id": client_id,
@@ -192,52 +231,36 @@ config = {
                 "client_secret": client_secret_hash,
                 "public": False,
                 "authorization_policy": "one_factor",
-                "redirect_uris": [
-                    oidc_callback_url,
-                    "http://localhost:8000/auth/callback"
-                ],
+                "redirect_uris": [oidc_callback_url, "http://localhost:8000/auth/callback"],
                 "scopes": ["openid", "offline_access", "profile", "email", "groups"],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
-                "token_endpoint_auth_method": "client_secret_basic"
-            }]
-        }
+                "token_endpoint_auth_method": "client_secret_basic",
+            }],
+        },
     },
     "notifier": {
         "disable_startup_check": True,
-        "filesystem": {
-            "filename": "/var/lib/authelia/notification.txt"
-        }
-    }
+        "filesystem": {"filename": "/var/lib/authelia/notification.txt"},
+    },
 }
 
 with open("authelia.yml", "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False,
               allow_unicode=True, width=120)
 
-# Verify output
+# Post-write validation
 with open("authelia.yml") as f:
     verify = yaml.safe_load(f)
 
-assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN"), \
-    "RSA key not correctly embedded"
-# Verify BCrypt hash format ($2y$ or $2b$)
-raw_hash = client_secret_hash.strip()
-assert raw_hash.startswith("$2y$") or raw_hash.startswith("$2b$"), \
-    f"client_secret must be a BCrypt hash (got: {raw_hash[:8]}...)"
-assert verify["session"]["cookies"][0]["domain"] == cookie_domain, \
-    "Cookie domain not set correctly"
-assert verify["storage"]["encryption_key"] == storage_key, \
-    "Storage encryption key not set correctly"
-assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret, \
-    "Reset password JWT secret not set correctly"
+assert verify["identity_providers"]["oidc"]["jwks"][0]["key"].startswith("-----BEGIN")
+assert verify["session"]["cookies"][0]["domain"] == cookie_domain
+assert verify["storage"]["encryption_key"] == storage_key
+assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret
 cookie = verify["session"]["cookies"][0]
-assert cookie["authelia_url"] != cookie["default_redirection_url"], \
-    "authelia_url and default_redirection_url must be different"
-assert cookie["authelia_url"].endswith("/authelia/"), \
-    "authelia_url must point to /authelia/ path"
-print(f"[OK] authelia.yml generated — authelia_url={verify['session']['cookies'][0]['authelia_url']}")
-print("[OK] authelia.yml validated successfully")
+assert cookie["authelia_url"] != cookie["default_redirection_url"]
+assert cookie["authelia_url"].endswith("/authelia/")
+print(f"[OK] authelia.yml generated — authelia_url={cookie['authelia_url']}")
 PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
