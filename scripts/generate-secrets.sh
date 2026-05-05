@@ -99,178 +99,16 @@ openssl genrsa -out oidc_key.pem 2048 2>/dev/null
 chmod 600 oidc_key.pem
 
 # ── Generate complete authelia.yml (NO placeholders) ────────────────────────
-python3 << PYEOF
-import textwrap
-
-rsa_key = open("oidc_key.pem").read().rstrip()
-indented_key = "\n".join("          " + line for line in rsa_key.split("\n"))
-
-config = textwrap.dedent("""\
----
-server:
-  address: tcp://0.0.0.0:9091/
-
-log:
-  level: info
-  format: text
-
-storage:
-  encryption_key: {storage_key}
-  local:
-    path: /var/lib/authelia
-
-session:
-  name: authelia_session
-  same_site: lax
-  expiration: 1h
-  inactivity: 5m
-  remember_me: 1M
-  cookies:
-    - domain: {cookie_domain}
-      authelia_url: https://{cookie_domain}
-      default_redirection_url: https://{cookie_domain}
-
-access_control:
-  default_policy: deny
-  rules:
-    - domain: "*"
-      policy: one_factor
-
-authentication_backend:
-  file:
-    path: /config/users_database.yml
-    password:
-      algorithm: argon2
-
-identity_providers:
-  oidc:
-    hmac_secret: {hmac_secret}
-    jwks:
-      - key: |
-{rsa_key}
-    enable_client_debug_messages: true
-    clients:
-      - client_id: {client_id}
-        client_name: "DocSearch Frontend"
-        client_secret: {client_secret_hash}
-        public: false
-        authorization_policy: one_factor
-        redirect_uris:
-          - "https://{cookie_domain}/auth/callback"
-          - "http://localhost:8000/auth/callback"
-        scopes:
-          - openid
-          - profile
-          - email
-          - groups
-        grant_types:
-          - authorization_code
-          - refresh_token
-        response_types:
-          - code
-        token_endpoint_auth_method: client_secret_basic
-
-notifier:
-  disable_startup_check: true
-  filesystem:
-    filename: /var/lib/authelia/notification.txt
-""").format(
-    storage_key="{storage_key}",
-    cookie_domain="{cookie_domain}",
-    hmac_secret="{hmac_secret}",
-    rsa_key="{rsa_key}",
-    client_id="{client_id}",
-    client_secret_hash="{client_secret_hash}",
-)
-
-# Actually format it properly with real values
-config = f"""---
-server:
-  address: tcp://0.0.0.0:9091/
-
-log:
-  level: info
-  format: text
-
-storage:
-  encryption_key: {repr(open('/dev/null').read())}
-  local:
-    path: /var/lib/authelia
-
-session:
-  name: authelia_session
-  same_site: lax
-  expiration: 1h
-  inactivity: 5m
-  remember_me: 1M
-  cookies:
-    - domain: {repr(open('/dev/null').read())}
-      authelia_url: https://{repr(open('/dev/null').read())}
-      default_redirection_url: https://{repr(open('/dev/null').read())}
-
-access_control:
-  default_policy: deny
-  rules:
-    - domain: "*"
-      policy: one_factor
-
-authentication_backend:
-  file:
-    path: /config/users_database.yml
-    password:
-      algorithm: argon2
-
-identity_providers:
-  oidc:
-    hmac_secret: {repr(open('/dev/null').read())}
-    jwks:
-      - key: |
-{indented_key}
-    enable_client_debug_messages: true
-    clients:
-      - client_id: {repr(open('/dev/null').read())}
-        client_name: "DocSearch Frontend"
-        client_secret: {repr(open('/dev/null').read())}
-        public: false
-        authorization_policy: one_factor
-        redirect_uris:
-          - "https://{repr(open('/dev/null').read())}/auth/callback"
-          - "http://localhost:8000/auth/callback"
-        scopes:
-          - openid
-          - profile
-          - email
-          - groups
-        grant_types:
-          - authorization_code
-          - refresh_token
-        response_types:
-          - code
-        token_endpoint_auth_method: client_secret_basic
-
-notifier:
-  disable_startup_check: true
-  filesystem:
-    filename: /var/lib/authelia/notification.txt
-"""
-PYEOF
-
-echo "[ERROR] Python generation failed – using shell template"
-
-# Shell fallback for authelia.yml generation
 python3 - "$AUTHELIA_FILE" "$COOKIE_DOMAIN" "$AUTHELIA_STORAGE_ENCRYPTION_KEY" \
-    "$SESSION_SECRET" "$OIDC_HMAC_SECRET" "$OIDC_CLIENT_ID" "$OIDC_CLIENT_SECRET_HASH" \
-    "$OIDC_ISSUER_URL" << 'PYSCRIPT'
-import sys, os
+    "$OIDC_HMAC_SECRET" "$OIDC_CLIENT_ID" "$OIDC_CLIENT_SECRET_HASH" << 'PYSCRIPT'
+import sys
 
 authelia_file = sys.argv[1]
 cookie_domain = sys.argv[2]
 storage_key = sys.argv[3]
-session_secret = sys.argv[4]
-hmac_secret = sys.argv[5]
-client_id = sys.argv[6]
-client_secret_hash = sys.argv[7]
-issuer_url = sys.argv[8]
+hmac_secret = sys.argv[4]
+client_id = sys.argv[5]
+client_secret_hash = sys.argv[6]
 
 with open("oidc_key.pem") as f:
     rsa_key = f.read().rstrip()
@@ -359,7 +197,6 @@ import yaml, sys
 try:
     with open('$AUTHELIA_FILE') as f:
         data = yaml.safe_load(f)
-    # Check required keys
     assert 'server' in data, 'missing server'
     assert 'storage' in data, 'missing storage'
     assert 'session' in data, 'missing session'
@@ -369,6 +206,9 @@ try:
     assert 'notifier' in data, 'missing notifier'
     assert 'encryption_key' in data['storage'], 'missing storage.encryption_key'
     assert 'local' in data['storage'], 'missing storage.local'
+    # Verify no placeholders remain
+    content = open('$AUTHELIA_FILE').read()
+    assert '\${' not in content, 'unresolved placeholder found'
     print('[OK] authelia.yml is valid and complete')
 except Exception as e:
     print(f'[ERROR] {e}')
