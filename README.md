@@ -1,6 +1,6 @@
 # DocSearch Frontend
 
-Internal document search platform frontend — FastAPI, HTMX, Tailwind CSS, Keycloak OIDC.
+Internal document search platform frontend — FastAPI, HTMX, Tailwind CSS, Authelia OIDC.
 
 ---
 
@@ -12,7 +12,7 @@ Internal document search platform frontend — FastAPI, HTMX, Tailwind CSS, Keyc
                           │                                                │
   Browser ──HTTPS──► Nginx ──► FastAPI (uvicorn) ──► RAG backend (rag-01) │
                           │          │                                     │
-                          │          └──► Keycloak ──► PostgreSQL          │
+                          │          └──► Authelia ──► Redis               │
                           └───────────────────────────────────────────────┘
 ```
 
@@ -20,7 +20,7 @@ Internal document search platform frontend — FastAPI, HTMX, Tailwind CSS, Keyc
 |-----------|-----------|---------|
 | Frontend  | FastAPI + Jinja2 + HTMX | Server-rendered UI, OIDC auth |
 | Styling   | Tailwind CSS (CDN) | Utility-first CSS, dark mode |
-| Auth      | Keycloak + Authlib | OIDC / OpenID Connect |
+| Auth      | Authelia + Authlib | OIDC / OpenID Connect |
 | Proxy     | Nginx | TLS termination, static files |
 | Search    | RAG backend (external) | Document retrieval & chat |
 
@@ -28,9 +28,9 @@ Internal document search platform frontend — FastAPI, HTMX, Tailwind CSS, Keyc
 
 ## Prerequisites
 
-- Docker ≥ 24 and Docker Compose v2
+- Docker >= 24 and Docker Compose v2
 - Python 3.12 (for local development)
-- A Keycloak instance (or use the bundled Docker service)
+- Authelia (bundled Docker service)
 - Access to the RAG backend service
 
 ---
@@ -51,13 +51,13 @@ pip install -r requirements.txt
 
 # 3. Configure environment variables
 cp .env.example .env
-# Edit .env with your Keycloak URL, realm, client credentials, and SECRET_KEY
+# Edit .env with your Authelia URL, OIDC client credentials, and SECRET_KEY
 
 # 4. Run the development server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open http://localhost:8000 – you will be redirected to Keycloak to sign in.
+Open http://localhost:8000 – you will be redirected to Authelia to sign in.
 
 ---
 
@@ -73,16 +73,36 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -subj "/CN=localhost"
 ```
 
+### Generate required secrets
+
+```bash
+# Session secret (64 hex characters)
+python -c "import secrets; print(secrets.token_hex(32))"
+
+# OIDC HMAC secret (32+ characters)
+python -c "import secrets; print(secrets.token_hex(16))"
+
+# OIDC client secret and its BCrypt hash
+CLIENT_SECRET=$(python -c "import secrets; print(secrets.token_hex(32))")
+echo "Client Secret: $CLIENT_SECRET"
+python -c "from passlib.hash import bcrypt; print(bcrypt.hash('$CLIENT_SECRET'))"
+
+# RSA private key for OIDC issuer (2048-bit)
+openssl genrsa -out authelia_key.pem 2048
+cat authelia_key.pem | awk '{print "  "$0}'
+rm authelia_key.pem
+```
+
 ### Start all services
 
 ```bash
 cp .env.example .env
-# Edit .env
+# Edit .env with generated secrets
 
 docker compose up -d
 ```
 
-Services start order: PostgreSQL → Keycloak → FastAPI → Nginx.
+Services start order: Redis -> Authelia -> FastAPI -> Nginx.
 
 Access the app at https://localhost (port 443).
 
@@ -90,33 +110,54 @@ Access the app at https://localhost (port 443).
 
 ```bash
 docker compose down
-# To also remove volumes (database data):
+# To also remove volumes (session data):
 docker compose down -v
 ```
 
 ---
 
-## Keycloak Configuration
+## Authentication Setup (Authelia + OIDC)
 
-After the Keycloak container starts (default: http://localhost – proxied at /auth/):
+### Quick Start (Development)
 
-1. **Log in** to the Keycloak admin console at `http://localhost:8080` with credentials from `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`.
+1. **Generate required secrets** (see Docker Setup section above)
 
-2. **Create a realm** (or import an existing one):
-   - Realm name should match `KEYCLOAK_REALM` in your `.env`.
+2. **Configure Authelia:**
+   - Copy `.env.example` to `.env` and fill in generated values
+   - For development without AD, Authelia uses file-based users (see Authelia docs)
+   - For AD integration, uncomment and configure `authentication_backend.ldap` in `authelia.yml`
 
-3. **Create a client**:
-   - Client ID: value of `KEYCLOAK_CLIENT_ID`
-   - Client authentication: **ON** (confidential)
-   - Valid redirect URIs: `https://<your-host>/auth/callback`
-   - Copy the client secret to `KEYCLOAK_CLIENT_SECRET`
+3. **Start the stack:**
+   ```bash
+   docker compose up -d
+   ```
 
-4. **Add AD group mapper** (for group-based access control):
-   - In the client → *Client scopes* → add a mapper of type **Group Membership**
-   - Token claim name: `groups`
-   - Full group path: enabled
+4. **Access points:**
+   - Application: `https://localhost` (port 443)
+   - Authelia portal: `http://localhost:9091`
 
-5. **Create groups** matching your `ALLOWED_AD_GROUPS` config and assign users.
+### OIDC Client Configuration
+
+- **Client ID:** `docsearch-frontend` (set via `OIDC_CLIENT_ID`)
+- **Redirect URI:** `https://localhost/auth/callback`
+- **Scopes:** `openid profile email groups`
+- **Grant Types:** `authorization_code`, `refresh_token`
+
+### Active Directory Integration
+
+1. Uncomment `authentication_backend.ldap` in `authelia.yml`
+2. Configure AD parameters:
+   - `url`: LDAP server address (e.g., `ldap://ad.example.com:389`)
+   - `base_dn`: Base distinguished name (e.g., `dc=example,dc=com`)
+   - `user`: Service account DN (e.g., `cn=authelia,ou=service,dc=example,dc=com`)
+   - `password`: Service account password (store in `.env` as `LDAP_PASSWORD`)
+3. Set `ALLOWED_AD_GROUPS` in `.env` to comma-separated group names
+
+### Group-Based Access Control
+
+- Users must belong to at least one group in `ALLOWED_AD_GROUPS`
+- Group membership is extracted from OIDC `groups` claim
+- `X-AD-Groups` header is automatically forwarded to RAG backend
 
 ---
 
@@ -201,12 +242,11 @@ mypy app/ --ignore-missing-imports --warn-unused-ignores --python-version 3.12
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `KEYCLOAK_URL` | Yes | — | Base URL of Keycloak (no trailing slash) |
-| `KEYCLOAK_REALM` | Yes | — | Keycloak realm name |
-| `KEYCLOAK_CLIENT_ID` | Yes | — | OIDC client ID |
-| `KEYCLOAK_CLIENT_SECRET` | Yes | — | OIDC client secret |
+| `OIDC_ISSUER_URL` | Yes | — | Base URL of Authelia (no trailing slash) |
+| `OIDC_CLIENT_ID` | Yes | — | OIDC client ID |
+| `OIDC_CLIENT_SECRET` | Yes | — | OIDC client secret (plain text) |
 | `RAG_SERVICE_URL` | No | `http://rag-01:8000` | RAG backend base URL |
-| `SECRET_KEY` | Yes | — | Session signing key (random hex, ≥ 32 bytes) |
+| `SECRET_KEY` | Yes | — | Session signing key (random hex, >= 32 bytes) |
 | `ALLOWED_AD_GROUPS` | No | `""` (all) | Comma-separated AD groups allowed access |
 | `HOST` | No | `0.0.0.0` | Uvicorn bind host |
 | `PORT` | No | `8000` | Uvicorn bind port |
@@ -247,9 +287,9 @@ Planned enhancements:
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Redirect loop on `/login` | Keycloak unreachable | Check `KEYCLOAK_URL` and container status |
-| `401` after callback | Client secret mismatch | Verify `KEYCLOAK_CLIENT_SECRET` in Keycloak admin |
+| Redirect loop on `/login` | Authelia unreachable | Check `OIDC_ISSUER_URL` and container status |
+| `401` after callback | Client secret mismatch | Verify `OIDC_CLIENT_SECRET` matches Authelia config |
 | `503` on search | RAG backend down | Check `RAG_SERVICE_URL` and rag-01 service |
 | `file://` links don't open | Browser security policy | See UNC Path Links section above |
 | Dark mode not persisting | localStorage blocked | Check browser privacy settings |
-| Keycloak container stuck | DB not ready | Wait for `keycloak-db` healthcheck to pass |
+| Authelia container stuck | Redis not ready | Wait for `redis` healthcheck to pass |

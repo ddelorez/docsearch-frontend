@@ -17,11 +17,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Keycloak / OIDC ──────────────────────────────────────────────────────
-    keycloak_url: str
-    keycloak_realm: str
-    keycloak_client_id: str
-    keycloak_client_secret: str
+    # ── OIDC / Authelia ──────────────────────────────────────────────────────
+    oidc_issuer_url: str
+    oidc_client_id: str
+    oidc_client_secret: str
 
     # ── Backend RAG service ──────────────────────────────────────────────────
     rag_service_url: str = "http://rag-01:8000"
@@ -39,14 +38,9 @@ class Settings(BaseSettings):
     # ── Derived / computed properties ────────────────────────────────────────
 
     @property
-    def oidc_issuer(self) -> str:
-        """Full issuer URL for the configured Keycloak realm."""
-        return f"{self.keycloak_url}/realms/{self.keycloak_realm}"
-
-    @property
     def oidc_discovery_url(self) -> str:
         """OpenID Connect discovery document URL."""
-        return f"{self.oidc_issuer}/.well-known/openid-configuration"
+        return f"{self.oidc_issuer_url}/.well-known/openid-configuration"
 
     @property
     def allowed_groups_list(self) -> list[str]:

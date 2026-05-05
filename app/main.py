@@ -7,9 +7,9 @@ POST /query         → HTMX-powered search proxy (protected)
 GET  /results       → Results partial (HTMX, protected)
 GET  /chat          → Chat mode page (protected)
 POST /chat          → Chat query proxy (HTMX, protected)
-GET  /login         → Redirect to Keycloak authorisation endpoint
+GET  /login         → Redirect to OIDC authorisation endpoint
 GET  /auth/callback → OIDC callback handler
-GET  /logout        → Clears session + redirects to Keycloak logout
+GET  /logout        → Clears session + redirects to Authelia logout
 GET  /health        → Public health check
 """
 
@@ -49,9 +49,9 @@ oauth = OAuth()
 
 def _register_oidc(settings: Any) -> None:
     oauth.register(
-        name="keycloak",
-        client_id=settings.keycloak_client_id,
-        client_secret=settings.keycloak_client_secret,
+        name="authelia",
+        client_id=settings.oidc_client_id,
+        client_secret=settings.oidc_client_secret,
         server_metadata_url=settings.oidc_discovery_url,
         client_kwargs={
             "scope": "openid email profile groups",
@@ -149,16 +149,16 @@ async def health(request: Request) -> JSONResponse:
 
 @app.get("/login")
 async def login(request: Request) -> RedirectResponse:
-    """Redirect to Keycloak's authorisation endpoint."""
+    """Redirect to Authelia's authorisation endpoint."""
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.keycloak.authorize_redirect(request, redirect_uri)
+    return await oauth.authelia.authorize_redirect(request, redirect_uri)
 
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request) -> Response:
-    """Handle the OIDC authorisation code callback from Keycloak."""
+    """Handle the OIDC authorisation code callback from Authelia."""
     try:
-        token = await oauth.keycloak.authorize_access_token(request)
+        token = await oauth.authelia.authorize_access_token(request)
     except Exception as exc:
         logger.error("OIDC callback error: %s", exc)
         return templates.TemplateResponse(
@@ -178,7 +178,7 @@ async def auth_callback(request: Request) -> Response:
         # Fallback: parse id_token claims
         id_token = token.get("id_token")
         if id_token:
-            userinfo = dict(oauth.keycloak.parse_id_token(token, nonce=None) or {})
+            userinfo = dict(oauth.authelia.parse_id_token(token, nonce=None) or {})
 
     groups = extract_ad_groups(userinfo)
 
@@ -198,17 +198,15 @@ async def auth_callback(request: Request) -> Response:
 
 @app.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
-    """Clear the local session and redirect to Keycloak's end-session endpoint."""
+    """Clear the local session and redirect to Authelia's end-session endpoint."""
     settings = get_settings()
     request.session.clear()
 
-    # Build Keycloak logout URL
-    keycloak_logout = (
-        f"{settings.keycloak_url}/realms/{settings.keycloak_realm}"
-        f"/protocol/openid-connect/logout"
-        f"?redirect_uri={request.url_for('index')}"
+    # Build Authelia logout URL
+    authelia_logout = (
+        f"{settings.oidc_issuer_url}/logout" f"?redirect_uri={request.url_for('index')}"
     )
-    return RedirectResponse(url=keycloak_logout, status_code=302)
+    return RedirectResponse(url=authelia_logout, status_code=302)
 
 
 # ── Protected application routes ──────────────────────────────────────────────

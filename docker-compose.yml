@@ -17,7 +17,7 @@ services:
     networks:
       - internal
     depends_on:
-      keycloak:
+      authelia:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
@@ -25,58 +25,41 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── Keycloak Identity Provider ──────────────────────────────────────────────
-  keycloak:
-    image: quay.io/keycloak/keycloak:latest
-    container_name: docsearch-keycloak
+  # ── Authelia Identity Provider ──────────────────────────────────────────────
+  authelia:
+    image: authelia/authelia:latest
+    container_name: docsearch-authelia
     restart: unless-stopped
-    command: start-dev
-    environment:
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
-      KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-keycloak_db_pass}
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      KC_HOSTNAME_STRICT: "false"
-      KC_HTTP_ENABLED: "true"
-      # Uncomment for realm import:
-      # KC_IMPORT: /opt/keycloak/data/import/realm-export.json
     volumes:
-      - keycloak-data:/opt/keycloak/data
-      # Uncomment to import realm on first start:
-      # - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ./authelia.yml:/config/configuration.yml:ro
+      - authelia-data:/var/lib/authelia
     expose:
-      - "8080"
+      - "9091"
     networks:
       - internal
     depends_on:
-      keycloak-db:
+      redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200'"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9091/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 30s
 
-  # ── PostgreSQL for Keycloak ─────────────────────────────────────────────────
-  keycloak-db:
-    image: postgres:16-alpine
-    container_name: docsearch-keycloak-db
+  # ── Redis for Authelia ──────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: docsearch-redis
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:-keycloak_db_pass}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - redis-data:/data
     expose:
-      - "5432"
+      - "6379"
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -98,11 +81,11 @@ services:
       - internal
     depends_on:
       - frontend
-      - keycloak
+      - authelia
 
 volumes:
-  postgres-data:
-  keycloak-data:
+  redis-data:
+  authelia-data:
 
 networks:
   internal:

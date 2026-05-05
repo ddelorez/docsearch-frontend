@@ -1,0 +1,75 @@
+---
+server:
+  host: 0.0.0.0
+  port: 9091
+  path: ""
+
+log:
+  level: info
+  format: text
+
+storage:
+  redis:
+    host: redis
+    port: 6379
+    database_index: 0
+    max_retries: 3
+
+session:
+  name: authelia_session
+  domain: localhost
+  secret: ${SESSION_SECRET}
+  expiration: 1h
+  inactivity: 5m
+  remember_me: 1M
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: "*"
+      policy: one_factor
+
+identity_providers:
+  oidc:
+    hmac_secret: ${OIDC_HMAC_SECRET}
+    issuer_private_key: |
+      ${OIDC_ISSUER_PRIVATE_KEY}
+    clients:
+      - client_id: ${OIDC_CLIENT_ID}
+        client_name: "DocSearch Frontend"
+        client_secret: ${OIDC_CLIENT_SECRET_HASH}
+        public: false
+        authorization_policy: one_factor
+        redirect_uris:
+          - "https://localhost/auth/callback"
+          - "http://localhost:8000/auth/callback"
+        scopes:
+          - openid
+          - profile
+          - email
+          - groups
+        grant_types:
+          - authorization_code
+          - refresh_token
+        response_types:
+          - code
+        token_endpoint_auth_method: client_secret_basic
+
+# Uncomment for Active Directory/LDAP integration:
+# authentication_backend:
+#   ldap:
+#     implementation: activedirectory
+#     url: ldap://your-ad-server:389
+#     timeout: 5s
+#     start_tls: false
+#     base_dn: dc=example,dc=com
+#     username_attribute: sAMAccountName
+#     additional_users_dn: ou=users
+#     users_filter: (&({username_attribute}={input})(objectClass=person))
+#     additional_groups_dn: ou=groups
+#     groups_filter: (member={dn})
+#     group_name_attribute: cn
+#     mail_attribute: mail
+#     display_name_attribute: displayName
+#     user: cn=authelia,ou=service accounts,dc=example,dc=com
+#     password: ${LDAP_PASSWORD}
