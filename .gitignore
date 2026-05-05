@@ -25,8 +25,8 @@ coverage.xml
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 docker-compose.override.yml
-postgres-data/
-keycloak-data/
+authelia-data/
+redis-data/
 certs/
 
 # ── IDE / Editor ─────────────────────────────────────────────────────────────

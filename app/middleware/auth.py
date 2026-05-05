@@ -38,7 +38,7 @@ def get_user_groups(request: Request) -> list[str]:
 def extract_ad_groups(userinfo: dict[str, Any]) -> list[str]:
     """Extract AD groups from an OIDC userinfo or id_token payload.
 
-    Keycloak typically maps AD group memberships to a ``groups`` claim.
+    The OIDC provider typically maps group memberships to a ``groups`` claim.
     Falls back to an empty list if the claim is absent.
 
     Parameters
@@ -65,7 +65,7 @@ def is_group_allowed(groups: list[str], allowed: list[str]) -> bool:
 
     If ``allowed`` is empty, all authenticated users are permitted.
     Group names are compared case-insensitively, and leading slashes
-    (Keycloak path format) are stripped before comparison.
+    (OIDC path format) are stripped before comparison.
 
     Parameters
     ----------

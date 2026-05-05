@@ -59,7 +59,7 @@ class TestLoginRoute:
             mock_oauth.authelia = mock_client
             # Even without mocking, the route exists – just check no unhandled 500
             response = test_client.get("/login", follow_redirects=False)
-            # Without a real Keycloak the OAuth lib may return 200, 302, or error
+            # Without a real OIDC provider the OAuth lib may return 200, 302, or error
             assert response.status_code in (200, 302, 500)
 
 
