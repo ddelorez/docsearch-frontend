@@ -36,7 +36,8 @@ This guide covers deploying DocSearch Frontend on a production server.
 - TLS certificate (Let's Encrypt recommended)
 - Access to the RAG backend service
 - Access to Active Directory/LDAP (if using AD authentication)
-- Python 3.12 with `passlib[bcrypt]` (for secret generation only)
+- Python 3.12 (for random secret generation)
+- `htpasswd` from `apache2-utils` or `httpd-tools` (for BCrypt hash generation)
 
 ---
 
@@ -91,7 +92,6 @@ Run the automated secret generation script:
 ```bash
 cd /opt/docsearch-frontend
 chmod +x scripts/generate-secrets.sh
-pip3 install passlib[bcrypt]
 ./scripts/generate-secrets.sh
 ```
 
@@ -111,9 +111,6 @@ Or generate manually:
 # Authelia storage encryption key (required in v4.38+)
 python3 -c "import secrets; print(secrets.token_hex(32))"
 
-# Reset password JWT secret (required in v4.38+)
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
 # OIDC HMAC secret (32+ characters)
 python3 -c "import secrets; print(secrets.token_hex(16))"
 
@@ -121,16 +118,13 @@ python3 -c "import secrets; print(secrets.token_hex(16))"
 CLIENT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 echo "Client Secret: $CLIENT_SECRET"
 
-# BCrypt hash of client secret (requires passlib)
-pip3 install passlib[bcrypt]
-python3 -c "from passlib.hash import bcrypt; print(bcrypt.hash('$CLIENT_SECRET'))"
+# BCrypt hash of client secret (requires htpasswd from apache2-utils or httpd-tools)
+htpasswd -nbB dummy "$CLIENT_SECRET" | cut -d: -f2
+# Note: In .env files, escape $ as $$ for Docker Compose
 
 # RSA private key for OIDC issuer (2048-bit, embedded in authelia.yml)
-openssl genrsa -out oidc_key.pem 2048
-# Embed the key into authelia.yml (replace __RSA_KEY_PLACEHOLDER__):
-RSA_KEY=$(cat oidc_key.pem | sed 's/^/          /')
-sed -i "s|__RSA_KEY_PLACEHOLDER__|$RSA_KEY|" authelia.yml
-rm oidc_key.pem
+# RSA key is embedded directly into authelia.yml by scripts/generate-secrets.sh
+# Do NOT attempt to embed manually with sed — it will break on PEM special characters
 
 # Session secret (64 hex characters)
 python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -154,7 +148,6 @@ Fill in the generated values:
 |----------|-------------|
 | `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP address. |
 | `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
-| `AUTHELIA_RESET_PASSWORD_JWT_SECRET` | **Required in v4.38+.** 32+ character hex string for signing password reset tokens. |
 | `OIDC_ISSUER_URL` | Internal Authelia URL: `http://authelia:9091` |
 | `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
 | `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
@@ -300,11 +293,10 @@ docker compose logs authelia
 
 Common causes in Authelia v4.38+:
 - **Missing `AUTHELIA_STORAGE_ENCRYPTION_KEY`** — must be a 32+ character hex string in `.env`
-- **Missing `AUTHELIA_RESET_PASSWORD_JWT_SECRET`** — must be a 32+ character hex string in `.env`
 - **Missing `AUTH_COOKIE_DOMAIN`** — must be a valid FQDN or IP address (not `localhost`)
 - **No `users_database.yml`** — must exist with at least one user (or LDAP configured)
 - **Invalid RSA key** — must be a valid PEM key embedded under `jwks[0].key` in `authelia.yml`
-- **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using passlib bcrypt
+- **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using `htpasswd -nbB`
 - **No notifier configured** — `authelia.yml` includes `notifier.filesystem` by default
 
 ### Frontend fails to start

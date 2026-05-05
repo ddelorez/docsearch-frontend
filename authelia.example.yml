@@ -11,6 +11,10 @@ storage:
   local:
     path: /var/lib/authelia
 
+identity_validation:
+  reset_password:
+    disable: true
+
 session:
   name: authelia_session
   same_site: lax
