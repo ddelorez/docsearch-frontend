@@ -12,10 +12,10 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -36,10 +36,10 @@ jobs:
     name: Type check (mypy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -61,19 +61,18 @@ jobs:
     name: Tests (pytest)
     runs-on: ubuntu-latest
     env:
-      # Minimal env for testing without real Keycloak
-      KEYCLOAK_URL: http://localhost:8080
-      KEYCLOAK_REALM: test
-      KEYCLOAK_CLIENT_ID: test-client
-      KEYCLOAK_CLIENT_SECRET: test-secret
+      # Minimal env for testing without real Authelia
+      OIDC_ISSUER_URL: http://localhost:9091
+      OIDC_CLIENT_ID: test-client
+      OIDC_CLIENT_SECRET: test-secret
       RAG_SERVICE_URL: http://localhost:9000
       SECRET_KEY: test-secret-key-not-for-production
       ALLOWED_AD_GROUPS: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -94,7 +93,7 @@ jobs:
             --cov-report=xml:coverage.xml
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: coverage.xml
@@ -105,13 +104,13 @@ jobs:
     name: Docker build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
