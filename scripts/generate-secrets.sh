@@ -245,7 +245,7 @@ config = {
     "server":                 {"address": "tcp://0.0.0.0:9091/"},
     "log":                    {"level": "info", "format": "text"},
     "storage":                {"encryption_key": storage_key,
-                               "local": {"path": "/var/lib/authelia"}},
+                               "local": {"path": "/var/lib/authelia/db.sqlite3"}},
     "identity_validation":    {"reset_password": {"jwt_secret": reset_password_jwt_secret}},
     "session": {
         "name": "authelia_session",
