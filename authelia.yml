@@ -1,39 +1,30 @@
 ---
 server:
-  host: 0.0.0.0
-  port: 9091
-  path: ""
+  address: tcp://0.0.0.0:9091/
 
 log:
   level: info
   format: text
 
 storage:
-  redis:
-    host: redis
-    port: 6379
-    database_index: 0
-    max_retries: 3
+  encryption_key: ${AUTHELIA_STORAGE_ENCRYPTION_KEY}
+  local:
+    path: /var/lib/authelia
+
+identity_validation:
+  reset_password:
+    disable: true
 
 session:
   name: authelia_session
-  domain: localhost
-  secret: ${SESSION_SECRET}
+  same_site: lax
   expiration: 1h
   inactivity: 5m
   remember_me: 1M
-
-# ── Default: file-based users (for development) ───────────────────────────────
-# For production with Active Directory, replace this entire section with the
-# `authentication_backend.ldap` block at the bottom of this file.
-authentication_backend:
-  file:
-    path: /config/users_database.yml
-    password:
-      algorithm: argon2
-    # Reset the password field for a user after they log in and change their
-    # password so that the new hash is stored in the database.
-    password_reset: false
+  cookies:
+    - domain: ${AUTH_COOKIE_DOMAIN}
+      authelia_url: https://${AUTH_COOKIE_DOMAIN}
+      default_redirection_url: https://${AUTH_COOKIE_DOMAIN}
 
 access_control:
   default_policy: deny
@@ -41,11 +32,19 @@ access_control:
     - domain: "*"
       policy: one_factor
 
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2
+
 identity_providers:
   oidc:
     hmac_secret: ${OIDC_HMAC_SECRET}
-    issuer_private_key: |
-      ${OIDC_ISSUER_PRIVATE_KEY}
+    jwks:
+      - key: |
+          ${OIDC_ISSUER_PRIVATE_KEY}
+    enable_client_debug_messages: true
     clients:
       - client_id: ${OIDC_CLIENT_ID}
         client_name: "DocSearch Frontend"
@@ -53,7 +52,7 @@ identity_providers:
         public: false
         authorization_policy: one_factor
         redirect_uris:
-          - "https://localhost/auth/callback"
+          - "https://${AUTH_COOKIE_DOMAIN}/auth/callback"
           - "http://localhost:8000/auth/callback"
         scopes:
           - openid
@@ -67,21 +66,7 @@ identity_providers:
           - code
         token_endpoint_auth_method: client_secret_basic
 
-# Uncomment for Active Directory/LDAP integration:
-# authentication_backend:
-#   ldap:
-#     implementation: activedirectory
-#     url: ldap://your-ad-server:389
-#     timeout: 5s
-#     start_tls: false
-#     base_dn: dc=example,dc=com
-#     username_attribute: sAMAccountName
-#     additional_users_dn: ou=users
-#     users_filter: (&({username_attribute}={input})(objectClass=person))
-#     additional_groups_dn: ou=groups
-#     groups_filter: (member={dn})
-#     group_name_attribute: cn
-#     mail_attribute: mail
-#     display_name_attribute: displayName
-#     user: cn=authelia,ou=service accounts,dc=example,dc=com
-#     password: ${LDAP_PASSWORD}
+notifier:
+  disable_startup_check: true
+  filesystem:
+    filename: /var/lib/authelia/notification.txt

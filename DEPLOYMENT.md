@@ -2,6 +2,8 @@
 
 This guide covers deploying DocSearch Frontend on a production server.
 
+> **Note:** Authelia v4.38+ is used, which requires a different configuration format than older versions. All config files in this repo are already updated for v4.38+.
+
 ---
 
 ## Architecture Overview
@@ -21,7 +23,7 @@ This guide covers deploying DocSearch Frontend on a production server.
 | Nginx | TLS termination, reverse proxy, static files |
 | FastAPI | Server-rendered UI, OIDC authentication, RAG proxy |
 | Authelia | OIDC identity provider (replaces Keycloak) |
-| Redis | Authelia session storage |
+| Redis | Authelia session and cache storage |
 | RAG backend | External document retrieval & chat service |
 
 ---
@@ -30,11 +32,11 @@ This guide covers deploying DocSearch Frontend on a production server.
 
 - Ubuntu 22.04+ (or equivalent Linux)
 - Docker >= 24 with Docker Compose v2
-- A domain name with DNS pointing to the server
+- A domain name with DNS pointing to the server (e.g., `docsearch.example.com`)
 - TLS certificate (Let's Encrypt recommended)
 - Access to the RAG backend service
 - Access to Active Directory/LDAP (if using AD authentication)
-- Python 3.12 (for secret generation only, not for running the app)
+- Python 3.12 with `passlib[bcrypt]` (for secret generation only)
 
 ---
 
@@ -84,19 +86,29 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 
 ## Step 3: Generate Secrets
 
-Run the secret generation script:
+Run the automated secret generation script:
 
 ```bash
 cd /opt/docsearch-frontend
 chmod +x scripts/generate-secrets.sh
+pip3 install passlib[bcrypt]
 ./scripts/generate-secrets.sh
 ```
+
+The script will:
+1. Prompt for your cookie domain (e.g., `docsearch.example.com`)
+2. Generate `AUTH_COOKIE_DOMAIN`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `SESSION_SECRET`, `OIDC_HMAC_SECRET`, `OIDC_CLIENT_SECRET` + BCrypt hash, RSA private key, and `SECRET_KEY`
+3. Write all values to `.env`
+4. Write the RSA key directly into `authelia.yml`
 
 Or generate manually:
 
 ```bash
-# Session secret (64 hex characters)
+# Authelia storage encryption key (required in v4.38+)
 python3 -c "import secrets; print(secrets.token_hex(32))"
+
+# Cookie domain (must contain a period, e.g. docsearch.example.com)
+# Do NOT use 'localhost' - Authelia requires a valid FQDN for cookies
 
 # OIDC HMAC secret (32+ characters)
 python3 -c "import secrets; print(secrets.token_hex(16))"
@@ -114,6 +126,12 @@ openssl genrsa -out authelia_key.pem 2048
 echo "RSA Key (copy exactly, with indentation):"
 cat authelia_key.pem | awk '{print "  "$0}'
 rm authelia_key.pem
+
+# Session secret (64 hex characters)
+python3 -c "import secrets; print(secrets.token_hex(32))"
+
+# FastAPI SECRET_KEY
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 ---
@@ -129,13 +147,15 @@ Fill in the generated values:
 
 | Variable | Description |
 |----------|-------------|
+| `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com`). Must contain a period — `localhost` is not valid. |
+| `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
 | `OIDC_ISSUER_URL` | Internal Authelia URL: `http://authelia:9091` |
 | `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
 | `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
 | `OIDC_CLIENT_SECRET_HASH` | BCrypt hash of `OIDC_CLIENT_SECRET` |
 | `SESSION_SECRET` | 64 hex character session secret |
 | `OIDC_HMAC_SECRET` | 32+ character HMAC secret |
-| `OIDC_ISSUER_PRIVATE_KEY` | RSA private key (indented, 2 spaces per line) |
+| `OIDC_ISSUER_PRIVATE_KEY` | RSA private key (written to `authelia.yml` by the script) |
 | `SECRET_KEY` | FastAPI session signing key (random hex) |
 | `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
 | `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
@@ -174,28 +194,54 @@ docker run --rm authelia/authelia authelia crypto hash generate argon2 --passwor
 
 ### Option B: Active Directory / LDAP (Production)
 
-1. Uncomment `authentication_backend.ldap` in `authelia.yml`
-2. Replace the `authentication_backend.file` section with the LDAP block
-3. Configure:
-   - `url`: LDAP server address (e.g., `ldap://ad.example.com:389` or `ldaps://...`)
-   - `base_dn`: Base distinguished name (e.g., `dc=example,dc=com`)
-   - `user`: Service account DN (e.g., `cn=authelia,ou=service,dc=example,dc=com`)
-   - `password`: Service account password (add to `.env` as `LDAP_PASSWORD`)
-4. Set `ALLOWED_AD_GROUPS` in `.env` to the groups allowed access
+1. Replace the `authentication_backend.file` section in `authelia.yml` with:
+
+```yaml
+authentication_backend:
+  ldap:
+    implementation: activedirectory
+    url: ldaps://ad.example.com:636
+    timeout: 5s
+    start_tls: false
+    base_dn: dc=example,dc=com
+    username_attribute: sAMAccountName
+    additional_users_dn: ou=users
+    users_filter: (&({username_attribute}={input})(objectClass=person))
+    additional_groups_dn: ou=groups
+    groups_filter: (member={dn})
+    group_name_attribute: cn
+    mail_attribute: mail
+    display_name_attribute: displayName
+    user: cn=authelia,ou=service,dc=example,dc=com
+    password: ${LDAP_PASSWORD}
+```
+
+2. Add `LDAP_PASSWORD` to `.env`
+3. Set `ALLOWED_AD_GROUPS` in `.env` to the groups allowed access
 
 ---
 
-## Step 6: Update nginx.conf for Production
+## Step 6: Configure Domain and Redirect URIs
 
-Edit `nginx.conf` and update:
+### Update `.env`
 
-1. **Server name**: Change `server_name _;` to `server_name docsearch.your-domain.com;`
-2. **TLS paths**: Ensure `ssl_certificate` and `ssl_certificate_key` point to your certs
-3. **Redirect URIs**: If using a custom domain, update redirect URIs in `authelia.yml`:
-   ```yaml
-   redirect_uris:
-     - "https://docsearch.your-domain.com/auth/callback"
-   ```
+Set `AUTH_COOKIE_DOMAIN` to your production domain:
+
+```
+AUTH_COOKIE_DOMAIN=docsearch.example.com
+```
+
+### Update `nginx.conf`
+
+Change `server_name _;` to your domain:
+
+```nginx
+server_name docsearch.example.com;
+```
+
+### Redirect URIs
+
+The `authelia.yml` uses `${AUTH_COOKIE_DOMAIN}` for redirect URIs, so they will automatically resolve from your `.env`. No manual edit needed.
 
 ---
 
@@ -231,7 +277,7 @@ curl -fk https://localhost/health
 
 ## Step 8: Verify Deployment
 
-1. Open `https://docsearch.your-domain.com` in a browser
+1. Open `https://docsearch.example.com` in a browser
 2. You should be redirected to the Authelia login page
 3. Log in with a file-based user or AD credentials
 4. Verify search functionality works
@@ -247,10 +293,14 @@ curl -fk https://localhost/health
 docker compose logs authelia
 ```
 
-Common causes:
-- Missing or invalid `users_database.yml`
-- Unresolved `${VARIABLE}` in `authelia.yml` (check `.env` values)
-- Invalid RSA key format (must be PEM, indented with 2 spaces)
+Common causes in Authelia v4.38+:
+- **Missing `AUTHELIA_STORAGE_ENCRYPTION_KEY`** — must be a 32+ character hex string in `.env`
+- **Missing `AUTH_COOKIE_DOMAIN`** — must be a valid FQDN with a period (not `localhost`)
+- **No notifier configured** — `authelia.yml` includes `notifier.filesystem` by default
+- **No storage backend** — `authelia.yml` uses `storage.local` by default
+- **Invalid RSA key** — must be a PEM key indented with 2 spaces under `jwks[0].key`
+- **Invalid BCrypt client secret hash** — must be generated from `OIDC_CLIENT_SECRET` using passlib bcrypt
+- **No `users_database.yml`** — must exist with at least one user (or LDAP configured)
 
 ### Frontend fails to start
 
