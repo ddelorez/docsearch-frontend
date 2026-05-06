@@ -48,15 +48,25 @@ oauth = OAuth()
 
 
 def _register_oidc(settings: Any) -> None:
+    client_kwargs: dict[str, str] = {
+        "scope": "openid email profile groups",
+        "response_type": "code",
+    }
+
+    # If a public Authelia URL is configured, override the authorization
+    # endpoint so the browser is redirected to the externally reachable URL
+    # instead of the internal Docker hostname.
+    if settings.authelia_public_url:
+        client_kwargs["authorize_url"] = (
+            f"{settings.authelia_public_url}/api/oidc/authorization"
+        )
+
     oauth.register(
         name="authelia",
         client_id=settings.oidc_client_id,
         client_secret=settings.oidc_client_secret,
         server_metadata_url=settings.oidc_discovery_url,
-        client_kwargs={
-            "scope": "openid email profile groups",
-            "response_type": "code",
-        },
+        client_kwargs=client_kwargs,
     )
 
 
@@ -95,7 +105,7 @@ def create_app() -> FastAPI:
         secret_key=settings.secret_key,
         session_cookie="docsearch_session",
         max_age=28800,  # 8 hours
-        https_only=False,  # set to True in production behind HTTPS
+        https_only=True,
         same_site="lax",
     )
 
@@ -168,8 +178,15 @@ async def api_state(request: Request) -> JSONResponse:
 @app.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Redirect to Authelia's authorisation endpoint."""
+    # Build the redirect URI — always use HTTPS when behind the proxy
     redirect_uri = request.url_for("auth_callback")
     if request.headers.get("x-forwarded-proto") == "https":
+        redirect_uri = redirect_uri.replace(scheme="https")
+    # If a public Authelia URL is configured, ensure the redirect URI
+    # uses the same public hostname for consistency
+    settings = get_settings()
+    if settings.authelia_public_url and redirect_uri.scheme != "https":
+        # Behind HTTPS proxy: force https scheme
         redirect_uri = redirect_uri.replace(scheme="https")
     return await oauth.authelia.authorize_redirect(request, redirect_uri)
 
@@ -222,10 +239,12 @@ async def logout(request: Request) -> RedirectResponse:
     settings = get_settings()
     request.session.clear()
 
-    # Build Authelia logout URL
-    authelia_logout = (
-        f"{settings.oidc_issuer_url}/logout" f"?redirect_uri={request.url_for('index')}"
-    )
+    # Build Authelia logout URL — use public URLs so the browser can reach them
+    authelia_base = settings.authelia_public_url or settings.oidc_issuer_url
+    index_url = str(request.url_for("index"))
+    if request.headers.get("x-forwarded-proto") == "https":
+        index_url = index_url.replace("http://", "https://")
+    authelia_logout = f"{authelia_base}/logout?redirect_uri={index_url}"
     return RedirectResponse(url=authelia_logout, status_code=302)
 
 

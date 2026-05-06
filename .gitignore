@@ -1,49 +1,46 @@
-# ── Python ───────────────────────────────────────────────────────────────────
-.venv/
-venv/
+# Analysis artifacts (browser/Playwright investigation output)
+# These are temporary diagnostic files — safe to delete at any time
+analysis/
+
+# Kilo AI agent config and runtime data
+.kilo/
+
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg
+*.pyc
+*.pyo
 *.egg-info/
 dist/
 build/
 .eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# Python caches
 .mypy_cache/
-.ruff_cache/
 .pytest_cache/
-htmlcov/
+.ruff_cache/
+
+# Coverage
 .coverage
-coverage.xml
-*.cover
-*.log
+coverage/
 
-# ── Environment ───────────────────────────────────────────────────────────────
-.env
-*.env.local
-
-# ── Docker ────────────────────────────────────────────────────────────────────
-docker-compose.override.yml
-authelia-data/
-redis-data/
-certs/
-
-# ── IDE / Editor ─────────────────────────────────────────────────────────────
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Environment / secrets
+.env
+authelia.yml
+certs/
+
+# OS
 .DS_Store
 Thumbs.db
 
-# ── Kilo ──────────────────────────────────────────────────────────────────────
-.kilo/agent-manager.json
-
-# ── Authelia ──────────────────────────────────────────────────────────────────
-authelia.yml
-oidc_key.pem
-.oidc_client_secret_hash
-
-# ── Node (just in case) ───────────────────────────────────────────────────────
+# Node (if ever needed)
 node_modules/

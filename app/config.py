@@ -22,6 +22,24 @@ class Settings(BaseSettings):
     oidc_client_id: str
     oidc_client_secret: str
 
+    # Public-facing URL for Authelia (used for browser redirects to the
+    # OIDC authorization endpoint).  Must be reachable from the user's browser,
+    # e.g. "https://sgisearch.sgi01.local/authelia".
+    # ⚠️  If left empty, OIDC login redirects will point to the internal
+    #     Docker hostname and users will NOT see the login page.
+    authelia_public_url: str = ""
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate critical production settings."""
+        if not self.authelia_public_url:
+            import warnings
+            warnings.warn(
+                "AUTHELIA_PUBLIC_URL is not set. OIDC login redirects will "
+                "use the internal Docker hostname and will fail in production. "
+                'Set AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia',
+                RuntimeWarning,
+            )
+
     # ── Backend RAG service ──────────────────────────────────────────────────
     rag_service_url: str = "http://rag-01:8000"
 
