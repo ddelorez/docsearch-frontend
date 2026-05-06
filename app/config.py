@@ -39,6 +39,7 @@ class Settings(BaseSettings):
                 "use the internal Docker hostname and will fail in production. "
                 "Set AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia",
                 RuntimeWarning,
+                stacklevel=2,
             )
 
     # ── Backend RAG service ──────────────────────────────────────────────────
