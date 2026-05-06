@@ -178,15 +178,8 @@ async def api_state(request: Request) -> JSONResponse:
 @app.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Redirect to Authelia's authorisation endpoint."""
-    # Build the redirect URI — always use HTTPS when behind the proxy
     redirect_uri = request.url_for("auth_callback")
     if request.headers.get("x-forwarded-proto") == "https":
-        redirect_uri = redirect_uri.replace(scheme="https")
-    # If a public Authelia URL is configured, ensure the redirect URI
-    # uses the same public hostname for consistency
-    settings = get_settings()
-    if settings.authelia_public_url and redirect_uri.scheme != "https":
-        # Behind HTTPS proxy: force https scheme
         redirect_uri = redirect_uri.replace(scheme="https")
     return await oauth.authelia.authorize_redirect(request, redirect_uri)
 
