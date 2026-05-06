@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,18 +27,17 @@ class Settings(BaseSettings):
     # Public-facing URL for Authelia (used for browser redirects to the
     # OIDC authorization endpoint).  Must be reachable from the user's browser,
     # e.g. "https://sgisearch.sgi01.local/authelia".
-    # ⚠️  If left empty, OIDC login redirects will point to the internal
-    #     Docker hostname and users will NOT see the login page.
+    # If left empty, OIDC login redirects will point to the internal
+    # Docker hostname and users will NOT see the login page.
     authelia_public_url: str = ""
 
     def model_post_init(self, __context: Any) -> None:
         """Validate critical production settings."""
         if not self.authelia_public_url:
-            import warnings
             warnings.warn(
                 "AUTHELIA_PUBLIC_URL is not set. OIDC login redirects will "
                 "use the internal Docker hostname and will fail in production. "
-                'Set AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia',
+                "Set AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia",
                 RuntimeWarning,
             )
 
