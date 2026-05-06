@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
+import httpx
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -47,10 +48,37 @@ logger = logging.getLogger(__name__)
 oauth = OAuth()
 
 
+def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, Any]:
+    """Fetch the OIDC discovery document, honouring the SSL-verify flag.
+
+    Authlib's ``client_kwargs["verify"]`` is only applied to the OAuth
+    token/userinfo HTTP client; it is NOT used for the discovery fetch
+    triggered by ``server_metadata_url``. When the OIDC provider is behind a
+    self-signed certificate (e.g. internal Authelia deployments), that
+    discovery request fails with ``CERTIFICATE_VERIFY_FAILED``.
+
+    To work around this we fetch the metadata ourselves with an httpx client
+    that respects ``verify_ssl`` and pass the resulting dict to Authlib via
+    ``server_metadata``, so it never has to perform the discovery request
+    itself.
+    """
+    if not verify_ssl:
+        logger.warning(
+            "OIDC SSL verification is DISABLED for discovery fetch (%s). "
+            "This should only be used in internal/dev environments.",
+            discovery_url,
+        )
+    with httpx.Client(verify=verify_ssl, timeout=10.0) as client:
+        response = client.get(discovery_url)
+        response.raise_for_status()
+        return response.json()
+
+
 def _register_oidc(settings: Any) -> None:
     client_kwargs: dict[str, Any] = {
         "scope": "openid email profile groups",
         "response_type": "code",
+        # Applied to the runtime OAuth httpx client (token/userinfo calls).
         "verify": settings.oidc_verify_ssl,
     }
 
@@ -60,11 +88,16 @@ def _register_oidc(settings: Any) -> None:
     if settings.authelia_public_url:
         client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
 
+    # Pre-fetch the discovery document so we control SSL verification.
+    server_metadata = _fetch_server_metadata(
+        settings.oidc_discovery_url, settings.oidc_verify_ssl
+    )
+
     oauth.register(
         name="authelia",
         client_id=settings.oidc_client_id,
         client_secret=settings.oidc_client_secret,
-        server_metadata_url=settings.oidc_discovery_url,
+        server_metadata=server_metadata,
         client_kwargs=client_kwargs,
     )
 
