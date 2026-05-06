@@ -48,9 +48,10 @@ oauth = OAuth()
 
 
 def _register_oidc(settings: Any) -> None:
-    client_kwargs: dict[str, str] = {
+    client_kwargs: dict[str, Any] = {
         "scope": "openid email profile groups",
         "response_type": "code",
+        "verify": settings.oidc_verify_ssl,
     }
 
     # If a public Authelia URL is configured, override the authorization

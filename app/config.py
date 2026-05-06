@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     oidc_issuer_url: str
     oidc_client_id: str
     oidc_client_secret: str
+    # Whether to verify SSL certificates when contacting the OIDC provider.
+    # Set to false when using self-signed certificates in internal environments.
+    oidc_verify_ssl: bool = True
 
     # Public-facing URL for Authelia (used for browser redirects to the
     # OIDC authorization endpoint).  Must be reachable from the user's browser,
