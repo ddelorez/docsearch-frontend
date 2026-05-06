@@ -89,17 +89,29 @@ def _register_oidc(settings: Any) -> None:
         client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
 
     # Pre-fetch the discovery document so we control SSL verification.
-    server_metadata = _fetch_server_metadata(
-        settings.oidc_discovery_url, settings.oidc_verify_ssl
-    )
+    # If the OIDC provider is unreachable at startup (e.g. in CI without a
+    # real Authelia instance), fall back to ``server_metadata_url`` so the
+    # app can still start; Authlib will retry the fetch lazily on first use.
+    register_kwargs: dict[str, Any] = {
+        "name": "authelia",
+        "client_id": settings.oidc_client_id,
+        "client_secret": settings.oidc_client_secret,
+        "client_kwargs": client_kwargs,
+    }
+    try:
+        register_kwargs["server_metadata"] = _fetch_server_metadata(
+            settings.oidc_discovery_url, settings.oidc_verify_ssl
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to pre-fetch OIDC discovery document from %s: %s. "
+            "Falling back to lazy discovery via server_metadata_url.",
+            settings.oidc_discovery_url,
+            exc,
+        )
+        register_kwargs["server_metadata_url"] = settings.oidc_discovery_url
 
-    oauth.register(
-        name="authelia",
-        client_id=settings.oidc_client_id,
-        client_secret=settings.oidc_client_secret,
-        server_metadata=server_metadata,
-        client_kwargs=client_kwargs,
-    )
+    oauth.register(**register_kwargs)
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
