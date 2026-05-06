@@ -144,6 +144,24 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/api/state")
+async def api_state(request: Request) -> JSONResponse:
+    """Return current authentication state. Public endpoint – returns empty user if not logged in."""
+    user = request.session.get("user")
+    groups = request.session.get("groups", [])
+    if user:
+        return JSONResponse({
+            "authenticated": True,
+            "user": user,
+            "groups": groups,
+        })
+    return JSONResponse({
+        "authenticated": False,
+        "user": None,
+        "groups": [],
+    })
+
+
 # ── Auth routes ───────────────────────────────────────────────────────────────
 
 
@@ -151,6 +169,8 @@ async def health(request: Request) -> JSONResponse:
 async def login(request: Request) -> RedirectResponse:
     """Redirect to Authelia's authorisation endpoint."""
     redirect_uri = request.url_for("auth_callback")
+    if request.headers.get("x-forwarded-proto") == "https":
+        redirect_uri = redirect_uri.replace(scheme="https")
     return await oauth.authelia.authorize_redirect(request, redirect_uri)
 
 
