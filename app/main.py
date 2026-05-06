@@ -57,9 +57,7 @@ def _register_oidc(settings: Any) -> None:
     # endpoint so the browser is redirected to the externally reachable URL
     # instead of the internal Docker hostname.
     if settings.authelia_public_url:
-        client_kwargs["authorize_url"] = (
-            f"{settings.authelia_public_url}/api/oidc/authorization"
-        )
+        client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
 
     oauth.register(
         name="authelia",
@@ -156,20 +154,27 @@ async def health(request: Request) -> JSONResponse:
 
 @app.get("/api/state")
 async def api_state(request: Request) -> JSONResponse:
-    """Return current authentication state. Public endpoint – returns empty user if not logged in."""
+    """Return current authentication state.
+
+    Public endpoint -- returns empty user if not logged in.
+    """
     user = request.session.get("user")
     groups = request.session.get("groups", [])
     if user:
-        return JSONResponse({
-            "authenticated": True,
-            "user": user,
-            "groups": groups,
-        })
-    return JSONResponse({
-        "authenticated": False,
-        "user": None,
-        "groups": [],
-    })
+        return JSONResponse(
+            {
+                "authenticated": True,
+                "user": user,
+                "groups": groups,
+            }
+        )
+    return JSONResponse(
+        {
+            "authenticated": False,
+            "user": None,
+            "groups": [],
+        }
+    )
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
