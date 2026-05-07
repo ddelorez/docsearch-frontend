@@ -51,17 +51,17 @@ services:
       - |
         if [ ! -f /config/users_database.yml ]; then
           cat > /config/users_database.yml << 'EOF'
-        ---
-        users:
-          CHANGE_ME_USERNAME:
-            disabled: false
-            displayname: 'CHANGE_ME - Set your display name'
-            password: '$argon2id$v=19$m=65536,t=3,p=4$arrPEI+IH3gPEXyGCcCksw$UdZ7CylPQyFGzyAC6MPiqFDUw8A/DeyArVnKu5gnIeM'
-            email: 'CHANGE_ME@example.com'
-            groups:
-              - 'admins'
-              - 'dev'
-        EOF
+---
+users:
+  CHANGE_ME_USERNAME:
+    disabled: false
+    displayname: 'CHANGE_ME - Set your display name'
+    password: 'CHANGE_ME_GENERATE_A_VALID_HASH'
+    email: 'CHANGE_ME@example.com'
+    groups:
+      - 'admins'
+      - 'dev'
+EOF
         fi
         exec authelia --config /config/configuration.yml
     expose:
