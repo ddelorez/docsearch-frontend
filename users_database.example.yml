@@ -1,16 +1,18 @@
-# Authelia users database — copy to users_database.yml and edit as needed.
+# Authelia file-based users database.
 #
-# For production with Active Directory, this file can remain empty;
-# Authelia will use LDAP as the authentication backend instead.
+# In production with Active Directory/LDAP, this file is not needed
+# (configure the ldap backend in authelia.yml instead).
 #
-# For development/demo, Authelia requires at least one user to be defined.
-# IMPORTANT: Replace all CHANGE_ME placeholders with actual values before deployment.
-#   Username: CHANGE_ME_USERNAME
-#   Password: CHANGE_ME_SET_IN_PRODUCTION
+# For local development, this file is generated automatically by:
+#   ./scripts/generate-secrets.sh
 #
-# To add a local user, generate an Argon2 password hash:
-#   python -c "from argon2 import PasswordHasher; ph = PasswordHasher(); print(ph.hash('YOUR_PASSWORD'))"
-# Then add the user block below.
+# The generator creates a single dev user with random password and stores
+# the credentials in your .env file (AUTHELIA_DEV_USERNAME, AUTHELIA_DEV_PASSWORD)
+# for convenience. The actual password hash uses Argon2id with the same
+# parameters as configured in authelia.yml (memory=65536, iterations=3, parallelism=4).
+#
+# If you need to create this file manually, use the following template.
+# Replace all CHANGE_ME values with your actual user data.
 ---
 users:
   CHANGE_ME_USERNAME:
@@ -19,4 +21,5 @@ users:
     password: 'CHANGE_ME_GENERATE_A_VALID_HASH'
     email: 'CHANGE_ME@example.com'
     groups:
-      - 'CHANGE_ME_GROUP'
+      - 'dev'
+      - 'admins'

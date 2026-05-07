@@ -346,11 +346,98 @@ PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
 
+# ── Generate users_database.yml (file authentication backend) ──────────────────
+# This creates a default development user. For production with LDAP/AD, you can
+# delete this file or leave it empty and configure the ldap backend instead.
+echo ""
+echo "Generating users_database.yml..."
+
+# Prompt for dev user credentials (defaults to 'helpdesk' / random password)
+echo -n "Development username (default: helpdesk): "
+read -r DEV_USER || DEV_USER="helpdesk"
+DEV_USER="${DEV_USER:-helpdesk}"
+
+# Generate a random password if not provided
+DEV_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
+echo -n "Development password (press Enter for auto-generated: ${DEV_PASSWORD:0:12}...): "
+read -r DEV_PASS_INPUT
+DEV_PASSWORD="${DEV_PASS_INPUT:-$DEV_PASSWORD}"
+
+# Optional: display name
+echo -n "Display name (default: SGI Helpdesk): "
+read -r DEV_DISPLAY || DEV_DISPLAY="SGI Helpdesk"
+DEV_DISPLAY="${DEV_DISPLAY:-SGI Helpdesk}"
+
+# Optional: email
+echo -n "Email (default: $DEV_USER@example.com): "
+read -r DEV_EMAIL || DEV_EMAIL="$DEV_USER@example.com"
+DEV_EMAIL="${DEV_EMAIL:-$DEV_USER@example.com}"
+
+# Generate Argon2 hash using Python (matches authelia.yml algorithm params)
+# Requires: pip install argon2-cffi
+echo "[INFO] Generating Argon2 hash for dev user password..."
+DEV_PASSWORD_HASH=$(python3 << 'PYEOF'
+import sys
+try:
+    from argon2 import PasswordHasher
+except ImportError:
+    print("[ERROR] argon2-cffi not installed. Install with: pip install argon2-cffi", file=sys.stderr)
+    print("Alternatively, manually generate a hash and set DEV_PASSWORD_HASH env var.", file=sys.stderr)
+    sys.exit(1)
+
+ph = PasswordHasher(
+    time_cost=3,
+    memory_cost=65536,
+    parallelism=4,
+    hash_len=32,
+    salt_len=16
+)
+print(ph.hash(sys.argv[1]))
+PYEOF
+"$DEV_PASSWORD")
+
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to generate Argon2 hash. Please install argon2-cffi:"
+    echo "  pip install argon2-cffi"
+    echo "Or manually create users_database.yml after setup."
+    exit 1
+fi
+
+echo "[OK] Argon2 hash generated"
+
+# Write users_database.yml
+cat > users_database.yml << EOF
+---
+users:
+  $DEV_USER:
+    disabled: false
+    displayname: '$DEV_DISPLAY'
+    password: '$DEV_PASSWORD_HASH'
+    email: '$DEV_EMAIL'
+    groups:
+      - 'dev'
+      - 'admins'
+EOF
+
+echo "[OK] users_database.yml created with user: $DEV_USER"
+echo ""
+echo "IMPORTANT: Save these credentials for development:"
+echo "  Username: $DEV_USER"
+echo "  Password: $DEV_PASSWORD"
+echo "  (This is the ONLY time the plaintext password is shown.)"
+echo ""
+
+# Update .env with the dev user credentials (convenience, not used by Authelia)
+set_env "AUTHELIA_DEV_USERNAME" "$DEV_USER"
+set_env "AUTHELIA_DEV_PASSWORD" "$DEV_PASSWORD"
+echo "[OK] Credentials stored in .env (AUTHELIA_DEV_USERNAME, AUTHELIA_DEV_PASSWORD)"
+
 echo ""
 echo "All secrets written to $ENV_FILE"
 echo "BCrypt hash stored in $HASH_FILE (kept out of .env to avoid Docker Compose issues)"
 echo "Complete authelia.yml generated"
+echo "users_database.yml created for file-based authentication"
 echo ""
 echo "Next steps:"
-echo "  1. Add at least one user to users_database.yml"
+echo "  1. Review generated files (authelia.yml, users_database.yml)"
 echo "  2. Run: docker compose up -d"

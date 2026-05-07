@@ -32,37 +32,11 @@ services:
     image: authelia/authelia:latest
     container_name: docsearch-authelia
     restart: unless-stopped
-    # No env_file — all config values are embedded in authelia.yml directly.
-    # Authelia treats AUTHELIA_* env vars as config overrides which causes
-    # "configuration environment variable not expected" warnings.
     volumes:
-      # Named volume persists users_database.yml and other config data
-      # across stack rebuilds (docker compose down && up --build).
       - authelia-config:/config
-      # Overlay configuration.yml from the repo (read-only).
       - ./authelia.yml:/config/configuration.yml:ro
+      - ./users_database.yml:/config/users_database.yml:ro
       - authelia-data:/var/lib/authelia
-    # Ensure users_database.yml exists before Authelia starts.
-    # Authelia requires this file with at least one user defined.
-    # On first run (or after a volume prune), we create a default user for development.
-    entrypoint:
-      - sh
-      - -c
-      - |
-        if [ ! -f /config/users_database.yml ]; then
-          cat > /config/users_database.yml << 'EOF'
----
-users:
-   CHANGE_ME_USERNAME:
-    disabled: false
-    displayname: 'CHANGE_ME - Set your display name'
-    password: 'CHANGE_ME_GENERATE_A_VALID_HASH_FOR_YOUR_USER'
-    email: 'CHANGE_ME@example.com'
-    groups:
-      - 'CHANGE_ME_GROUP'
-EOF
-        fi
-        exec authelia --config /config/configuration.yml
     expose:
       - "9091"
     networks:
