@@ -415,3 +415,25 @@ docker compose up -d --remove-orphans
 ```
 
 > **Note:** `authelia.yml` contains embedded secrets and is gitignored. `users_database.yml` is also gitignored and managed by `generate-secrets.sh`. After pulling updates, verify both files are still correct and re-run `./scripts/generate-secrets.sh` if needed.
+
+---
+
+## Generated Files (Gitignored)
+
+The following files are created locally by `./scripts/generate-secrets.sh` and are **not tracked** in the repository. Fresh clones will not have them — run the script to regenerate:
+
+| File | Purpose |
+|------|---------|
+| `.env` | Environment variables and secrets |
+| `authelia.yml` | Authelia server configuration (embedded RSA key, secrets) |
+| `users_database.yml` | File-based user database (Argon2id password hashes) |
+| `oidc_key.pem` | RSA private key for OIDC provider |
+| `.oidc_client_secret_hash` | BCrypt hash of `OIDC_CLIENT_SECRET` |
+| `certs/` | TLS certificates (self-signed for dev, Let's Encrypt for prod) |
+
+> **If any of these files appear as "tracked and modified" on a fresh clone**, they were accidentally committed in a prior branch. Remove them from the index with:
+> ```bash
+> git rm --cached .env authelia.yml users_database.yml oidc_key.pem .oidc_client_secret_hash
+> git rm --cached -r certs/
+> git commit -m "chore: remove accidentally tracked secret files from git index"
+> ```
