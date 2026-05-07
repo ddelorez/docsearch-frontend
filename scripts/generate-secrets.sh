@@ -32,6 +32,15 @@ if [ -d "$USERS_FILE" ]; then
     fi
 fi
 
+# ── Detect stale authelia-config volume that may cause directory re-creation ───
+if command -v docker &>/dev/null && docker volume ls --format '{{.Name}}' | grep -q 'docsearch-frontend_authelia-config'; then
+    echo "[ERROR] Stale Docker volume 'docsearch-frontend_authelia-config' exists."
+    echo "        This volume used to mount /config and can cause users_database.yml to appear as a directory."
+    echo "        Remove it with: docker volume rm docsearch-frontend_authelia-config"
+    echo "        Then re-run this script and restart containers."
+    exit 1
+fi
+
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
@@ -185,9 +194,12 @@ AUTHELIA_SESSION_DOMAIN=$(get_env AUTHELIA_SESSION_DOMAIN)
 if [ -z "$AUTHELIA_SESSION_DOMAIN" ]; then
     AUTHELIA_SESSION_DOMAIN="$COOKIE_DOMAIN"
     set_env "AUTHELIA_SESSION_DOMAIN" "$AUTHELIA_SESSION_DOMAIN"
-else
-    echo "[OK] AUTHELIA_SESSION_DOMAIN (already set: $AUTHELIA_SESSION_DOMAIN)"
 fi
+
+# ── OIDC issuer URL ───────────────────────────────────────────────────────────
+# This is the public-facing issuer URL. May be empty; Python will default to
+# https://<AUTH_COOKIE_DOMAIN>/authelia if not set.
+OIDC_ISSUER_URL=$(get_env OIDC_ISSUER_URL)
 
 # ── Generate secrets only if missing ─────────────────────────────────────────
 AUTHELIA_STORAGE_ENCRYPTION_KEY=$(get_env AUTHELIA_STORAGE_ENCRYPTION_KEY)
@@ -356,6 +368,7 @@ fi
 # ── Ensure authelia.yml is a writable file (handle stale dirs/perms from prior runs) ─
 export COOKIE_DOMAIN
 export AUTHELIA_SESSION_DOMAIN
+export OIDC_ISSUER_URL
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
 export RESET_PASSWORD_JWT_SECRET
 export OIDC_HMAC_SECRET
@@ -450,6 +463,7 @@ reset_password_jwt_secret  = os.environ["RESET_PASSWORD_JWT_SECRET"]
 hmac_secret                = os.environ["OIDC_HMAC_SECRET"]
 client_id                  = os.environ["OIDC_CLIENT_ID"]
 client_secret_hash         = os.environ["OIDC_CLIENT_SECRET_HASH"]
+oidc_issuer_url            = os.environ.get("OIDC_ISSUER_URL") or f"https://{cookie_domain}/authelia"
 
 with open("oidc_key.pem") as f:
     rsa_key = f.read().rstrip() + "\n"  # PEM must end with newline
@@ -493,6 +507,41 @@ config = {
     },
     "identity_providers": {
         "oidc": {
+            "issuer": oidc_issuer_url,
+            "hmac_secret": hmac_secret,
+            "jwks": [{"key": LiteralStr(rsa_key)}],
+            "enable_client_debug_messages": True,
+            "clients": [{
+                "client_id": client_id,
+                "client_name": "DocSearch Frontend",
+                "client_secret": client_secret_hash,
+                "public": False,
+                "authorization_policy": "one_factor",
+                "redirect_uris": [oidc_callback_url, "http://localhost:8000/auth/callback"],
+                "scopes": ["openid", "offline_access", "profile", "email", "groups"],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "client_secret_basic",
+            }],
+        },
+    },
+    "access_control": {
+        "default_policy": "deny",
+        "rules": [{"domain": "*", "policy": "one_factor"}],
+    },
+    "authentication_backend": {
+        "file": {
+            "path": "/config/users_database.yml",
+            "password": {
+                "algorithm": "argon2",
+                "iterations": 3, "memory": 65536, "parallelism": 4,
+                "key_length": 32, "salt_length": 16,
+            },
+        },
+    },
+    "identity_providers": {
+        "oidc": {
+            "issuer": oidc_issuer_url,
             "hmac_secret": hmac_secret,
             "jwks": [{"key": LiteralStr(rsa_key)}],
             "enable_client_debug_messages": True,
