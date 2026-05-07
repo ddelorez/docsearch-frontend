@@ -4,9 +4,9 @@
 # Authelia will use LDAP as the authentication backend instead.
 #
 # For development/demo, Authelia requires at least one user to be defined.
-# Default credentials (for docker-compose auto-creation):
-#   Username: helpdesk
-#   Password: StarTech.com!
+# IMPORTANT: Replace all CHANGE_ME placeholders with actual values before deployment.
+#   Username: CHANGE_ME_USERNAME
+#   Password: CHANGE_ME_SET_IN_PRODUCTION
 #
 # To add a local user, generate an Argon2 password hash:
 #   python -c "from argon2 import PasswordHasher; ph = PasswordHasher(); print(ph.hash('YOUR_PASSWORD'))"
