@@ -45,24 +45,25 @@ services:
     # Ensure users_database.yml exists before Authelia starts.
     # Authelia requires this file with at least one user defined.
     # On first run (or after a volume prune), we create a default user for development.
-    entrypoint: |
-      sh -c '
+    entrypoint:
+      - sh
+      - -c
+      - |
         if [ ! -f /config/users_database.yml ]; then
-          cat > /config/users_database.yml << '\''EOF'\''
----
-users:
-  CHANGE_ME_USERNAME:
-    disabled: false
-    displayname: '\''CHANGE_ME - Set your display name'\''
-    password: '\''$argon2id$v=19$m=65536,t=3,p=4$arrPEI+IH3gPEXyGCcCksw$UdZ7CylPQyFGzyAC6MPiqFDUw8A/DeyArVnKu5gnIeM'\''
-    email: '\''CHANGE_ME@example.com'\''
-    groups:
-      - '\''admins'\''
-      - '\''dev'\''
-EOF
+          cat > /config/users_database.yml << 'EOF'
+        ---
+        users:
+          CHANGE_ME_USERNAME:
+            disabled: false
+            displayname: 'CHANGE_ME - Set your display name'
+            password: '$argon2id$v=19$m=65536,t=3,p=4$arrPEI+IH3gPEXyGCcCksw$UdZ7CylPQyFGzyAC6MPiqFDUw8A/DeyArVnKu5gnIeM'
+            email: 'CHANGE_ME@example.com'
+            groups:
+              - 'admins'
+              - 'dev'
+        EOF
         fi
         exec authelia --config /config/configuration.yml
-      '
     expose:
       - "9091"
     networks:
