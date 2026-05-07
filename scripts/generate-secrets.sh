@@ -4,26 +4,55 @@ set -euo pipefail
 ENV_FILE=".env"
 AUTHELIA_FILE="authelia.yml"
 HASH_FILE=".oidc_client_secret_hash"
+FORCE_REGENERATE=false
+
+# Parse flags
+for arg in "$@"; do
+    case $arg in
+        --force|-f)
+            FORCE_REGENERATE=true
+            echo "[INFO] Force regenerate mode enabled — will overwrite existing secrets"
+            ;;
+    esac
+done
+
+# ── Cleanup trap for temporary argon2 venv (covers normal exit, errors, signals) ──
+TMP_VENV_DIR=""
+cleanup_tmp_venv() {
+    # Capture incoming exit status so we don't mask the script's real exit code
+    local rc=$?
+    if [ -n "${TMP_VENV_DIR:-}" ] && [ -d "${TMP_VENV_DIR:-}" ]; then
+        rm -rf "$TMP_VENV_DIR" 2>/dev/null || true
+        echo "[OK] Cleaned up temporary venv: $TMP_VENV_DIR"
+    fi
+    return $rc
+}
+trap cleanup_tmp_venv EXIT
 
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
+# ── .env file setup ──────────────────────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
     cp .env.example "$ENV_FILE"
     echo "Created $ENV_FILE from .env.example"
 fi
 
-echo -n "Cookie domain (e.g. docsearch.example.com, or 127.0.0.1 for local): "
-read -r COOKIE_DOMAIN
-if [ -z "$COOKIE_DOMAIN" ]; then
-    COOKIE_DOMAIN="127.0.0.1"
-    echo "Using default: $COOKIE_DOMAIN"
-fi
-
+# ── Smart set_env: only set if missing, placeholder, or forced ───────────────
+#   - If key doesn't exist → append
+#   - If key exists but value is a placeholder ("changeme-*") → overwrite
+#   - If key exists with real value and NOT forced → skip with message
 set_env() {
     local key="$1" value="$2"
-    if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
-        # Use python to do the substitution safely (no sed special-char issues)
+    local existing_val
+    existing_val=$(grep -oP "^${key}=\K.*" "$ENV_FILE" 2>/dev/null || echo "")
+    
+    if [ -z "$existing_val" ]; then
+        # Key doesn't exist — append
+        echo "${key}=${value}" >> "$ENV_FILE"
+        echo "  [SET] $key (new)"
+    elif [[ "$existing_val" == changeme-* ]] && [ "$FORCE_REGENERATE" = false ]; then
+        # Placeholder — overwrite
         python3 -c "
 import re, sys
 key, value = sys.argv[1], sys.argv[2]
@@ -36,12 +65,29 @@ with open('$ENV_FILE', 'w') as f:
         else:
             f.write(line)
 " "$key" "$value"
+        echo "  [SET] $key (replaced placeholder)"
+    elif [ "$FORCE_REGENERATE" = true ]; then
+        # Force mode — always overwrite
+        python3 -c "
+import re, sys
+key, value = sys.argv[1], sys.argv[2]
+with open('$ENV_FILE') as f:
+    lines = f.readlines()
+with open('$ENV_FILE', 'w') as f:
+    for line in lines:
+        if line.startswith(key + '='):
+            f.write(f'{key}={value}\n')
+        else:
+            f.write(line)
+" "$key" "$value"
+        echo "  [SET] $key (forced overwrite)"
     else
-        echo "${key}=${value}" >> "$ENV_FILE"
+        # Real existing value — preserve
+        echo "  [SKIP] $key (already set, use --force to overwrite)"
     fi
 }
 
-# Returns the value from .env, or empty string if missing OR a "changeme-*" placeholder
+# ── Get existing value or empty ──────────────────────────────────────────────
 get_env() {
     local val
     val=$(grep -oP "^${1}=\K.*" "$ENV_FILE" 2>/dev/null || echo "")
@@ -52,73 +98,106 @@ get_env() {
     fi
 }
 
-set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
+# ── Cookie domain ────────────────────────────────────────────────────────────
+COOKIE_DOMAIN=$(get_env AUTH_COOKIE_DOMAIN)
+if [ -n "$COOKIE_DOMAIN" ] && [ "$FORCE_REGENERATE" = false ]; then
+    echo "[OK] AUTH_COOKIE_DOMAIN (already set: $COOKIE_DOMAIN)"
+else
+    CURRENT_DOMAIN=$(grep '^AUTH_COOKIE_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo 'not set')
+    echo -n "Cookie domain (e.g. docsearch.example.com, or 127.0.0.1 for local) "
+    echo "(current: ${CURRENT_DOMAIN:-not set}): "
+    read -r COOKIE_DOMAIN_INPUT
+    if [ -z "$COOKIE_DOMAIN_INPUT" ]; then
+        COOKIE_DOMAIN="${CURRENT_DOMAIN:-127.0.0.1}"
+        echo "Using existing or default: $COOKIE_DOMAIN"
+    else
+        COOKIE_DOMAIN="$COOKIE_DOMAIN_INPUT"
+    fi
+    set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
+fi
 
+# ── Generate secrets only if missing ─────────────────────────────────────────
 AUTHELIA_STORAGE_ENCRYPTION_KEY=$(get_env AUTHELIA_STORAGE_ENCRYPTION_KEY)
 if [ -z "$AUTHELIA_STORAGE_ENCRYPTION_KEY" ]; then
     AUTHELIA_STORAGE_ENCRYPTION_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     set_env "AUTHELIA_STORAGE_ENCRYPTION_KEY" "$AUTHELIA_STORAGE_ENCRYPTION_KEY"
+else
+    echo "[OK] AUTHELIA_STORAGE_ENCRYPTION_KEY (already set)"
 fi
-echo "[OK] AUTHELIA_STORAGE_ENCRYPTION_KEY"
 
-# Renamed from AUTHELIA_RESET_PASSWORD_JWT_SECRET — Authelia treats AUTHELIA_*
-# env vars as config overrides, causing "configuration environment variable not
-# expected" warnings.
+# Handle RESET_PASSWORD_JWT_SECRET (migration from old name)
 RESET_PASSWORD_JWT_SECRET=$(get_env RESET_PASSWORD_JWT_SECRET)
 if [ -z "$RESET_PASSWORD_JWT_SECRET" ]; then
-    # Migrate from old name if present
     OLD_VAL=$(get_env AUTHELIA_RESET_PASSWORD_JWT_SECRET)
     if [ -n "$OLD_VAL" ]; then
         RESET_PASSWORD_JWT_SECRET="$OLD_VAL"
-        # Remove the old key from .env
-        sed -i '/^AUTHELIA_RESET_PASSWORD_JWT_SECRET=/d' "$ENV_FILE"
+        sed -i '/^AUTHELIA_RESET_PASSWORD_JWT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
+        set_env "RESET_PASSWORD_JWT_SECRET" "$RESET_PASSWORD_JWT_SECRET"
     else
         RESET_PASSWORD_JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+        set_env "RESET_PASSWORD_JWT_SECRET" "$RESET_PASSWORD_JWT_SECRET"
     fi
-    set_env "RESET_PASSWORD_JWT_SECRET" "$RESET_PASSWORD_JWT_SECRET"
+else
+    echo "[OK] RESET_PASSWORD_JWT_SECRET (already set)"
 fi
-echo "[OK] RESET_PASSWORD_JWT_SECRET"
 
 SESSION_SECRET=$(get_env SESSION_SECRET)
 if [ -z "$SESSION_SECRET" ]; then
     SESSION_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     set_env "SESSION_SECRET" "$SESSION_SECRET"
+else
+    echo "[OK] SESSION_SECRET (already set)"
 fi
-echo "[OK] SESSION_SECRET"
 
 OIDC_HMAC_SECRET=$(get_env OIDC_HMAC_SECRET)
 if [ -z "$OIDC_HMAC_SECRET" ]; then
     OIDC_HMAC_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(16))")
     set_env "OIDC_HMAC_SECRET" "$OIDC_HMAC_SECRET"
+else
+    echo "[OK] OIDC_HMAC_SECRET (already set)"
 fi
-echo "[OK] OIDC_HMAC_SECRET"
 
 OIDC_CLIENT_ID=$(get_env OIDC_CLIENT_ID)
-[ -z "$OIDC_CLIENT_ID" ] && OIDC_CLIENT_ID="docsearch-frontend"
-set_env "OIDC_CLIENT_ID" "$OIDC_CLIENT_ID"
+if [ -z "$OIDC_CLIENT_ID" ]; then
+    OIDC_CLIENT_ID="docsearch-frontend"
+    set_env "OIDC_CLIENT_ID" "$OIDC_CLIENT_ID"
+else
+    echo "[OK] OIDC_CLIENT_ID (already set: $OIDC_CLIENT_ID)"
+fi
 
 OIDC_CLIENT_SECRET=$(get_env OIDC_CLIENT_SECRET)
 if [ -z "$OIDC_CLIENT_SECRET" ]; then
     OIDC_CLIENT_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     set_env "OIDC_CLIENT_SECRET" "$OIDC_CLIENT_SECRET"
+    echo "  [SET] OIDC_CLIENT_SECRET (new — save this securely: $OIDC_CLIENT_SECRET)"
+else
+    echo "[OK] OIDC_CLIENT_SECRET (already set)"
 fi
-echo "Client secret (save this securely): $OIDC_CLIENT_SECRET"
 
 # Store the BCrypt hash in a separate file (NOT .env) to avoid Docker Compose's
 # variable interpolation, which would expand $KA-like substrings in the hash
 # even with $$ escaping.
-needs_new_hash=true
+needs_new_hash=false
+if [ "$FORCE_REGENERATE" = true ]; then
+    needs_new_hash=true
+fi
 if [ -f "$HASH_FILE" ]; then
     EXISTING_HASH=$(cat "$HASH_FILE")
     if [[ "$EXISTING_HASH" =~ ^\$2[yb]\$ ]]; then
-        needs_new_hash=false
+        if [ "$FORCE_REGENERATE" = false ]; then
+            needs_new_hash=false
+            echo "[OK] .oidc_client_secret_hash (existing valid BCrypt hash reused)"
+        else
+            needs_new_hash=true
+            echo "[INFO] Regenerating BCrypt hash (--force)"
+        fi
     else
         echo "[WARN] Existing $HASH_FILE is not a valid BCrypt hash; regenerating"
+        needs_new_hash=true
     fi
+else
+    needs_new_hash=true
 fi
-
-# Also clean up any stale OIDC_CLIENT_SECRET_HASH from .env (no longer used)
-sed -i '/^OIDC_CLIENT_SECRET_HASH=/d' "$ENV_FILE" 2>/dev/null || true
 
 if $needs_new_hash; then
     if command -v htpasswd &>/dev/null; then
@@ -129,8 +208,6 @@ if $needs_new_hash; then
         echo "[ERROR] htpasswd required. Install apache2-utils or httpd-tools."
         exit 1
     fi
-else
-    echo "[OK] $HASH_FILE (existing valid hash reused)"
 fi
 
 OIDC_CLIENT_SECRET_HASH=$(cat "$HASH_FILE")
@@ -139,8 +216,9 @@ SECRET_KEY=$(get_env SECRET_KEY)
 if [ -z "$SECRET_KEY" ]; then
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     set_env "SECRET_KEY" "$SECRET_KEY"
+else
+    echo "[OK] SECRET_KEY (already set)"
 fi
-echo "[OK] SECRET_KEY"
 
 # Handle stale directory (Docker bind-mount can create one if file missing)
 if [ -d "oidc_key.pem" ]; then
@@ -152,15 +230,57 @@ if [ -d "oidc_key.pem" ]; then
         exit 1
     fi
 fi
+
 if [ ! -f "oidc_key.pem" ]; then
-    echo "[OK] Generating RSA private key..."
+    echo "[OK] Generating RSA private key for OIDC..."
     openssl genrsa -out oidc_key.pem 2048 2>/dev/null
     chmod 600 oidc_key.pem
 else
     echo "[OK] Reusing existing oidc_key.pem"
 fi
 
-# ── Export all variables needed by the Python block ──────────────────────────
+# ── Check for SSL certificates ────────────────────────────────────────────────
+# If certs/ directory doesn't exist or is missing key/cert, generate self-signed.
+# Never overwrite existing certs unless --force is passed.
+if [ ! -d "certs" ]; then
+    mkdir -p certs
+fi
+
+cert_privkey_exists=false
+cert_fullchain_exists=false
+if [ -f "certs/privkey.pem" ]; then cert_privkey_exists=true; fi
+if [ -f "certs/fullchain.pem" ]; then cert_fullchain_exists=true; fi
+
+if [ "$FORCE_REGENERATE" = true ]; then
+    echo "[INFO] --force: regenerating self-signed SSL certs in certs/ (overwriting existing)"
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout certs/privkey.pem \
+      -out certs/fullchain.pem \
+      -subj "/CN=localhost" 2>/dev/null
+    echo "[OK] Self-signed certificates regenerated in certs/"
+elif $cert_privkey_exists && $cert_fullchain_exists; then
+    echo "[OK] SSL certificates already present in certs/ (reusing existing — not regenerating)"
+elif $cert_privkey_exists || $cert_fullchain_exists; then
+    if $cert_privkey_exists; then
+        echo "[WARN] certs/fullchain.pem missing while certs/privkey.pem exists — regenerating both"
+    else
+        echo "[WARN] certs/privkey.pem missing while certs/fullchain.pem exists — regenerating both"
+    fi
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout certs/privkey.pem \
+      -out certs/fullchain.pem \
+      -subj "/CN=localhost" 2>/dev/null
+    echo "[OK] Self-signed certificates generated in certs/"
+else
+    echo "[INFO] SSL certificates not found in certs/ — generating self-signed dev certs..."
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout certs/privkey.pem \
+      -out certs/fullchain.pem \
+      -subj "/CN=localhost" 2>/dev/null
+    echo "[OK] Self-signed certificates generated in certs/"
+fi
+
+# ── Ensure authelia.yml is a writable file (handle stale dirs/perms from prior runs) ─
 export COOKIE_DOMAIN
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
 export RESET_PASSWORD_JWT_SECRET
@@ -347,66 +467,145 @@ PYEOF
 chmod 600 "$AUTHELIA_FILE"
 
 # ── Generate users_database.yml (file authentication backend) ──────────────────
-# This creates a default development user. For production with LDAP/AD, you can
-# delete this file or leave it empty and configure the ldap backend instead.
+# Fully .env-driven, non-interactive flow.
+#
+# Sources:
+#   AUTHELIA_DEV_USERNAME    — default 'helpdesk' if missing
+#   AUTHELIA_DEV_PASSWORD    — auto-generated (token_urlsafe(24)) if missing;
+#                              shown once in plaintext as it is the only time.
+#   AUTHELIA_DEV_DISPLAYNAME — default 'SGI Helpdesk' if missing
+#   AUTHELIA_DEV_EMAIL       — default '<username>@example.com' if missing
+#
+# Idempotency:
+#   - If users_database.yml exists AND username+password are populated in .env
+#     AND --force is NOT set → skip entirely (no venv created).
+#   - --force always regenerates the hash and users_database.yml, but reuses
+#     existing .env values (does NOT rotate password unless missing).
+#
+# Hashing uses a temporary, isolated Python venv with argon2-cffi. The venv is
+# removed by the EXIT trap registered near the top of this script.
 echo ""
-echo "Generating users_database.yml..."
 
-# Prompt for dev user credentials (defaults to 'helpdesk' / random password)
-echo -n "Development username (default: helpdesk): "
-read -r DEV_USER || DEV_USER="helpdesk"
-DEV_USER="${DEV_USER:-helpdesk}"
+EXISTING_DEV_USER=$(get_env AUTHELIA_DEV_USERNAME)
+EXISTING_DEV_PASSWORD=$(get_env AUTHELIA_DEV_PASSWORD)
+EXISTING_DEV_DISPLAY=$(get_env AUTHELIA_DEV_DISPLAYNAME)
+EXISTING_DEV_EMAIL=$(get_env AUTHELIA_DEV_EMAIL)
 
-# Generate a random password if not provided
-DEV_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
-echo -n "Development password (press Enter for auto-generated: ${DEV_PASSWORD:0:12}...): "
-read -r DEV_PASS_INPUT
-DEV_PASSWORD="${DEV_PASS_INPUT:-$DEV_PASSWORD}"
+if [ "$FORCE_REGENERATE" = false ] \
+   && [ -f "users_database.yml" ] \
+   && [ -n "$EXISTING_DEV_USER" ] \
+   && [ -n "$EXISTING_DEV_PASSWORD" ]; then
+    echo "[OK] users_database.yml already exists and dev credentials present in .env (reusing — skipping Argon2 hash)"
+else
+    echo "[INFO] Generating users_database.yml (non-interactive, .env-driven)..."
 
-# Optional: display name
-echo -n "Display name (default: SGI Helpdesk): "
-read -r DEV_DISPLAY || DEV_DISPLAY="SGI Helpdesk"
-DEV_DISPLAY="${DEV_DISPLAY:-SGI Helpdesk}"
+    # ── Resolve values from .env or apply defaults ──────────────────────────────
+    GENERATED_PASSWORD=false
 
-# Optional: email
-echo -n "Email (default: $DEV_USER@example.com): "
-read -r DEV_EMAIL || DEV_EMAIL="$DEV_USER@example.com"
-DEV_EMAIL="${DEV_EMAIL:-$DEV_USER@example.com}"
+    # Username
+    if [ -n "$EXISTING_DEV_USER" ]; then
+        DEV_USER="$EXISTING_DEV_USER"
+        echo "[OK] AUTHELIA_DEV_USERNAME from .env: $DEV_USER"
+    else
+        DEV_USER="helpdesk"
+        echo "[INFO] AUTHELIA_DEV_USERNAME missing — defaulting to: $DEV_USER"
+        set_env "AUTHELIA_DEV_USERNAME" "$DEV_USER"
+    fi
 
-# Generate Argon2 hash using Python (matches authelia.yml algorithm params)
-# Requires: pip install argon2-cffi
-echo "[INFO] Generating Argon2 hash for dev user password..."
-DEV_PASSWORD_HASH=$(python3 << 'PYEOF'
+    # Password (reuse if present even on --force; only generate when missing)
+    if [ -n "$EXISTING_DEV_PASSWORD" ]; then
+        DEV_PASSWORD="$EXISTING_DEV_PASSWORD"
+        echo "[OK] AUTHELIA_DEV_PASSWORD from .env (reusing)"
+    else
+        DEV_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+        GENERATED_PASSWORD=true
+        echo "[INFO] AUTHELIA_DEV_PASSWORD missing — auto-generated"
+        set_env "AUTHELIA_DEV_PASSWORD" "$DEV_PASSWORD"
+    fi
+
+    # Display name
+    if [ -n "$EXISTING_DEV_DISPLAY" ]; then
+        DEV_DISPLAY="$EXISTING_DEV_DISPLAY"
+        echo "[OK] AUTHELIA_DEV_DISPLAYNAME from .env: $DEV_DISPLAY"
+    else
+        DEV_DISPLAY="SGI Helpdesk"
+        echo "[INFO] AUTHELIA_DEV_DISPLAYNAME missing — defaulting to: $DEV_DISPLAY"
+        set_env "AUTHELIA_DEV_DISPLAYNAME" "$DEV_DISPLAY"
+    fi
+
+    # Email
+    if [ -n "$EXISTING_DEV_EMAIL" ]; then
+        DEV_EMAIL="$EXISTING_DEV_EMAIL"
+        echo "[OK] AUTHELIA_DEV_EMAIL from .env: $DEV_EMAIL"
+    else
+        DEV_EMAIL="${DEV_USER}@example.com"
+        echo "[INFO] AUTHELIA_DEV_EMAIL missing — defaulting to: $DEV_EMAIL"
+        set_env "AUTHELIA_DEV_EMAIL" "$DEV_EMAIL"
+    fi
+
+    # ── Set up temporary venv for argon2-cffi ───────────────────────────────────
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[ERROR] python3 not found on PATH — required to create the temporary venv."
+        exit 1
+    fi
+
+    TMP_VENV_DIR=$(mktemp -d -t docsearch-argon2-venv.XXXXXX)
+    echo "[INFO] Creating temporary venv for argon2-cffi at $TMP_VENV_DIR"
+
+    if ! python3 -m venv "$TMP_VENV_DIR" 2>/tmp/docsearch-venv-err.$$; then
+        echo "[ERROR] Failed to create Python venv. The 'venv' module may be missing."
+        echo "        On Debian/Ubuntu: sudo apt install python3-venv"
+        echo "        On Fedora/RHEL:   sudo dnf install python3-virtualenv"
+        if [ -s /tmp/docsearch-venv-err.$$ ]; then
+            echo "        Underlying error:"
+            sed 's/^/          /' /tmp/docsearch-venv-err.$$
+        fi
+        rm -f /tmp/docsearch-venv-err.$$
+        exit 1
+    fi
+    rm -f /tmp/docsearch-venv-err.$$
+
+    echo "[INFO] Upgrading pip (quiet)…"
+    if ! "$TMP_VENV_DIR/bin/pip" install --quiet --upgrade pip; then
+        echo "[ERROR] Failed to upgrade pip in temporary venv."
+        exit 1
+    fi
+
+    echo "[INFO] Installing argon2-cffi (quiet)…"
+    if ! "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi; then
+        echo "[ERROR] Failed to install argon2-cffi in temporary venv."
+        echo "        Check network connectivity and pip configuration."
+        exit 1
+    fi
+
+    # ── Hash password using the venv's Python ───────────────────────────────────
+    echo "[INFO] Generating Argon2 hash for dev user password..."
+    DEV_PASSWORD_HASH=$("$TMP_VENV_DIR/bin/python" - "$DEV_PASSWORD" << 'PYEOF'
 import sys
-try:
-    from argon2 import PasswordHasher
-except ImportError:
-    print("[ERROR] argon2-cffi not installed. Install with: pip install argon2-cffi", file=sys.stderr)
-    print("Alternatively, manually generate a hash and set DEV_PASSWORD_HASH env var.", file=sys.stderr)
-    sys.exit(1)
+from argon2 import PasswordHasher
 
 ph = PasswordHasher(
     time_cost=3,
     memory_cost=65536,
     parallelism=4,
     hash_len=32,
-    salt_len=16
+    salt_len=16,
 )
 print(ph.hash(sys.argv[1]))
 PYEOF
-"$DEV_PASSWORD")
+) || {
+        echo "[ERROR] Failed to generate Argon2 hash via temporary venv."
+        exit 1
+    }
 
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to generate Argon2 hash. Please install argon2-cffi:"
-    echo "  pip install argon2-cffi"
-    echo "Or manually create users_database.yml after setup."
-    exit 1
-fi
+    if [ -z "$DEV_PASSWORD_HASH" ]; then
+        echo "[ERROR] Argon2 hash output was empty."
+        exit 1
+    fi
+    echo "[OK] Argon2 hash generated"
 
-echo "[OK] Argon2 hash generated"
-
-# Write users_database.yml
-cat > users_database.yml << EOF
+    # ── Write users_database.yml ────────────────────────────────────────────────
+    cat > users_database.yml << EOF
 ---
 users:
   $DEV_USER:
@@ -419,18 +618,21 @@ users:
       - 'admins'
 EOF
 
-echo "[OK] users_database.yml created with user: $DEV_USER"
-echo ""
-echo "IMPORTANT: Save these credentials for development:"
-echo "  Username: $DEV_USER"
-echo "  Password: $DEV_PASSWORD"
-echo "  (This is the ONLY time the plaintext password is shown.)"
-echo ""
+    echo "[OK] users_database.yml written for user: $DEV_USER"
 
-# Update .env with the dev user credentials (convenience, not used by Authelia)
-set_env "AUTHELIA_DEV_USERNAME" "$DEV_USER"
-set_env "AUTHELIA_DEV_PASSWORD" "$DEV_PASSWORD"
-echo "[OK] Credentials stored in .env (AUTHELIA_DEV_USERNAME, AUTHELIA_DEV_PASSWORD)"
+    # ── Show plaintext password ONLY when freshly generated ─────────────────────
+    if [ "$GENERATED_PASSWORD" = true ]; then
+        echo ""
+        echo "================================================================"
+        echo "  IMPORTANT: SAVE THIS DEV PASSWORD NOW"
+        echo "  This is the ONLY time the plaintext password is shown."
+        echo "----------------------------------------------------------------"
+        echo "  Username: $DEV_USER"
+        echo "  Password: $DEV_PASSWORD"
+        echo "================================================================"
+        echo ""
+    fi
+fi
 
 echo ""
 echo "All secrets written to $ENV_FILE"
