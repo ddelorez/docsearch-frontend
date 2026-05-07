@@ -16,19 +16,6 @@ for arg in "$@"; do
     esac
 done
 
-# ── Cleanup trap for temporary argon2 venv (covers normal exit, errors, signals) ──
-TMP_VENV_DIR=""
-cleanup_tmp_venv() {
-    # Capture incoming exit status so we don't mask the script's real exit code
-    local rc=$?
-    if [ -n "${TMP_VENV_DIR:-}" ] && [ -d "${TMP_VENV_DIR:-}" ]; then
-        rm -rf "$TMP_VENV_DIR" 2>/dev/null || true
-        echo "[OK] Cleaned up temporary venv: $TMP_VENV_DIR"
-    fi
-    return $rc
-}
-trap cleanup_tmp_venv EXIT
-
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
@@ -466,179 +453,137 @@ PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
 
-# ── Generate users_database.yml (file authentication backend) ──────────────────
-# Fully .env-driven, non-interactive flow.
+# ── Manage users_database.yml from .env (file authentication backend) ──────────
+# This block ensures users_database.yml is populated so Authelia can start.
+# If the file already contains a real user, it is left untouched.
 #
-# Sources:
-#   AUTHELIA_DEV_USERNAME    — default 'helpdesk' if missing
-#   AUTHELIA_DEV_PASSWORD    — auto-generated (token_urlsafe(24)) if missing;
-#                              shown once in plaintext as it is the only time.
-#   AUTHELIA_DEV_DISPLAYNAME — default 'SGI Helpdesk' if missing
-#   AUTHELIA_DEV_EMAIL       — default '<username>@example.com' if missing
+# Sources (from .env):
+#   ADMIN_USERNAME       — Authelia username (default: admin)
+#   ADMIN_PASSWORD_HASH  — Pre-computed Argon2id hash (MUST start with $argon2id$)
+#   ADMIN_EMAIL          — User email
+#   ADMIN_DISPLAYNAME    — Display name
 #
 # Idempotency:
-#   - If users_database.yml exists AND username+password are populated in .env
-#     AND --force is NOT set → skip entirely (no venv created).
-#   - --force always regenerates the hash and users_database.yml, but reuses
-#     existing .env values (does NOT rotate password unless missing).
-#
-# Hashing uses a temporary, isolated Python venv with argon2-cffi. The venv is
-# removed by the EXIT trap registered near the top of this script.
+#   - If users_database.yml already has real user data → skip entirely.
+#   - If missing, empty, or still the repo placeholder (users: {}) → generate
+#     it from the .env variables.
+#   - --force always regenerates from current .env values.
 echo ""
 
-EXISTING_DEV_USER=$(get_env AUTHELIA_DEV_USERNAME)
-EXISTING_DEV_PASSWORD=$(get_env AUTHELIA_DEV_PASSWORD)
-EXISTING_DEV_DISPLAY=$(get_env AUTHELIA_DEV_DISPLAYNAME)
-EXISTING_DEV_EMAIL=$(get_env AUTHELIA_DEV_EMAIL)
+USERS_FILE="users_database.yml"
 
-if [ "$FORCE_REGENERATE" = false ] \
-   && [ -f "users_database.yml" ] \
-   && [ -n "$EXISTING_DEV_USER" ] \
-   && [ -n "$EXISTING_DEV_PASSWORD" ]; then
-    echo "[OK] users_database.yml already exists and dev credentials present in .env (reusing — skipping Argon2 hash)"
+has_real_users() {
+    # Returns 0 (true) if the file exists AND contains actual user entries.
+    # Returns 1 (false) if the file is missing, empty, or just a placeholder.
+    if [ ! -f "$USERS_FILE" ]; then
+        return 1
+    fi
+    # Strip comments and blank lines, then check if any line under "users:"
+    # defines a real user key (i.e. a username indented under "users:").
+    # The repo ships "users: {}" as a placeholder.
+    local content
+    content=$(sed '/^#/d;/^[[:space:]]*$/d' "$USERS_FILE")
+    # If the file just says "users: {}" or "users: null" or "users: ~" → placeholder
+    if echo "$content" | grep -qE '^users:[[:space:]]*(\{\}|null|~)[[:space:]]*$'; then
+        return 1
+    fi
+    # If there's no "users:" key at all → placeholder
+    if ! echo "$content" | grep -qE '^users:'; then
+        return 1
+    fi
+    # Check if there's an actual username entry (indented key under users:)
+    if echo "$content" | grep -qE '^  [a-zA-Z0-9_.-]+:'; then
+        return 0
+    fi
+    return 1
+}
+
+# Read values from .env
+ADMIN_USER=$(get_env ADMIN_USERNAME)
+ADMIN_HASH=$(get_env ADMIN_PASSWORD_HASH)
+ADMIN_EMAIL_VAL=$(get_env ADMIN_EMAIL)
+ADMIN_DISPLAY_VAL=$(get_env ADMIN_DISPLAYNAME)
+
+# Apply defaults for display name and email (username is needed first)
+ADMIN_USER="${ADMIN_USER:-admin}"
+
+if [ "$FORCE_REGENERATE" = false ] && has_real_users; then
+    echo "[OK] users_database.yml already contains real user data (verified — skipping)"
 else
-    echo "[INFO] Generating users_database.yml (non-interactive, .env-driven)..."
-
-    # ── Resolve values from .env or apply defaults ──────────────────────────────
-    GENERATED_PASSWORD=false
-
-    # Username
-    if [ -n "$EXISTING_DEV_USER" ]; then
-        DEV_USER="$EXISTING_DEV_USER"
-        echo "[OK] AUTHELIA_DEV_USERNAME from .env: $DEV_USER"
-    else
-        DEV_USER="helpdesk"
-        echo "[INFO] AUTHELIA_DEV_USERNAME missing — defaulting to: $DEV_USER"
-        set_env "AUTHELIA_DEV_USERNAME" "$DEV_USER"
-    fi
-
-    # Password (reuse if present even on --force; only generate when missing)
-    if [ -n "$EXISTING_DEV_PASSWORD" ]; then
-        DEV_PASSWORD="$EXISTING_DEV_PASSWORD"
-        echo "[OK] AUTHELIA_DEV_PASSWORD from .env (reusing)"
-    else
-        DEV_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
-        GENERATED_PASSWORD=true
-        echo "[INFO] AUTHELIA_DEV_PASSWORD missing — auto-generated"
-        set_env "AUTHELIA_DEV_PASSWORD" "$DEV_PASSWORD"
-    fi
-
-    # Display name
-    if [ -n "$EXISTING_DEV_DISPLAY" ]; then
-        DEV_DISPLAY="$EXISTING_DEV_DISPLAY"
-        echo "[OK] AUTHELIA_DEV_DISPLAYNAME from .env: $DEV_DISPLAY"
-    else
-        DEV_DISPLAY="SGI Helpdesk"
-        echo "[INFO] AUTHELIA_DEV_DISPLAYNAME missing — defaulting to: $DEV_DISPLAY"
-        set_env "AUTHELIA_DEV_DISPLAYNAME" "$DEV_DISPLAY"
-    fi
-
-    # Email
-    if [ -n "$EXISTING_DEV_EMAIL" ]; then
-        DEV_EMAIL="$EXISTING_DEV_EMAIL"
-        echo "[OK] AUTHELIA_DEV_EMAIL from .env: $DEV_EMAIL"
-    else
-        DEV_EMAIL="${DEV_USER}@example.com"
-        echo "[INFO] AUTHELIA_DEV_EMAIL missing — defaulting to: $DEV_EMAIL"
-        set_env "AUTHELIA_DEV_EMAIL" "$DEV_EMAIL"
-    fi
-
-    # ── Set up temporary venv for argon2-cffi ───────────────────────────────────
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "[ERROR] python3 not found on PATH — required to create the temporary venv."
+    # Validate the hash is present and looks like an Argon2id hash
+    if [ -z "$ADMIN_HASH" ]; then
+        echo "[ERROR] ADMIN_PASSWORD_HASH is not set in .env."
+        echo "        Generate a hash with:"
+        echo "          docker run --rm authelia/authelia authelia crypto hash generate argon2 \\"
+        echo "            --password 'YourStrongPassword' --random-salt \\"
+        echo "            --iterations 3 --memory 65536 --parallelism 4"
+        echo "        Then paste the hash into ADMIN_PASSWORD_HASH in your .env file"
+        echo "        and re-run this script."
         exit 1
     fi
 
-    TMP_VENV_DIR=$(mktemp -d -t docsearch-argon2-venv.XXXXXX)
-    echo "[INFO] Creating temporary venv for argon2-cffi at $TMP_VENV_DIR"
-
-    if ! python3 -m venv "$TMP_VENV_DIR" 2>/tmp/docsearch-venv-err.$$; then
-        echo "[ERROR] Failed to create Python venv. The 'venv' module may be missing."
-        echo "        On Debian/Ubuntu: sudo apt install python3-venv"
-        echo "        On Fedora/RHEL:   sudo dnf install python3-virtualenv"
-        if [ -s /tmp/docsearch-venv-err.$$ ]; then
-            echo "        Underlying error:"
-            sed 's/^/          /' /tmp/docsearch-venv-err.$$
-        fi
-        rm -f /tmp/docsearch-venv-err.$$
-        exit 1
-    fi
-    rm -f /tmp/docsearch-venv-err.$$
-
-    echo "[INFO] Upgrading pip (quiet)…"
-    if ! "$TMP_VENV_DIR/bin/pip" install --quiet --upgrade pip; then
-        echo "[ERROR] Failed to upgrade pip in temporary venv."
+    if ! [[ "$ADMIN_HASH" =~ ^\$argon2id\$ ]]; then
+        echo "[ERROR] ADMIN_PASSWORD_HASH does not look like a valid Argon2id hash."
+        echo "        Expected format: \$argon2id\$v=19\$m=65536,t=3,p=4\$..."
+        echo "        Got: ${ADMIN_HASH:0:30}..."
+        echo "        Generate a compatible hash with:"
+        echo "          docker run --rm authelia/authelia authelia crypto hash generate argon2 \\"
+        echo "            --password 'YourStrongPassword' --random-salt \\"
+        echo "            --iterations 3 --memory 65536 --parallelism 4"
         exit 1
     fi
 
-    echo "[INFO] Installing argon2-cffi (quiet)…"
-    if ! "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi; then
-        echo "[ERROR] Failed to install argon2-cffi in temporary venv."
-        echo "        Check network connectivity and pip configuration."
-        exit 1
+    ADMIN_EMAIL_VAL="${ADMIN_EMAIL_VAL:-${ADMIN_USER}@example.com}"
+    ADMIN_DISPLAY_VAL="${ADMIN_DISPLAY_VAL:-Administrator}"
+
+    if [ "$FORCE_REGENERATE" = true ] && has_real_users; then
+        echo "[INFO] --force: regenerating users_database.yml from .env values"
     fi
 
-    # ── Hash password using the venv's Python ───────────────────────────────────
-    echo "[INFO] Generating Argon2 hash for dev user password..."
-    DEV_PASSWORD_HASH=$("$TMP_VENV_DIR/bin/python" - "$DEV_PASSWORD" << 'PYEOF'
-import sys
-from argon2 import PasswordHasher
-
-ph = PasswordHasher(
-    time_cost=3,
-    memory_cost=65536,
-    parallelism=4,
-    hash_len=32,
-    salt_len=16,
-)
-print(ph.hash(sys.argv[1]))
-PYEOF
-) || {
-        echo "[ERROR] Failed to generate Argon2 hash via temporary venv."
-        exit 1
-    }
-
-    if [ -z "$DEV_PASSWORD_HASH" ]; then
-        echo "[ERROR] Argon2 hash output was empty."
-        exit 1
-    fi
-    echo "[OK] Argon2 hash generated"
-
-    # ── Write users_database.yml ────────────────────────────────────────────────
-    cat > users_database.yml << EOF
+    cat > "$USERS_FILE" << EOF
+# Authelia users database for file-based authentication (development only).
+#
+# Generated by scripts/generate-secrets.sh — do not edit manually.
+# For production with Active Directory/LDAP, configure the ldap backend in
+# authelia.yml instead and remove this file.
+#
+# ── To add additional users ──────────────────────────────────────────────────
+# Generate a new Argon2id hash:
+#   docker run --rm authelia/authelia authelia crypto hash generate argon2 \\
+#     --password 'NewUserPassword' --random-salt \\
+#     --iterations 3 --memory 65536 --parallelism 4
+#
+# Then append a new user block below:
+#
+#   newusername:
+#     disabled: false
+#     displayname: 'New User'
+#     password: '\$argon2id\$v=19\$...'
+#     email: 'newuser@example.com'
+#     groups:
+#       - 'dev'
+#       - 'admins'
+# ──────────────────────────────────────────────────────────────────────────────
 ---
 users:
-  $DEV_USER:
+  ${ADMIN_USER}:
     disabled: false
-    displayname: '$DEV_DISPLAY'
-    password: '$DEV_PASSWORD_HASH'
-    email: '$DEV_EMAIL'
+    displayname: '${ADMIN_DISPLAY_VAL}'
+    password: '${ADMIN_HASH}'
+    email: '${ADMIN_EMAIL_VAL}'
     groups:
       - 'dev'
       - 'admins'
 EOF
 
-    echo "[OK] users_database.yml written for user: $DEV_USER"
-
-    # ── Show plaintext password ONLY when freshly generated ─────────────────────
-    if [ "$GENERATED_PASSWORD" = true ]; then
-        echo ""
-        echo "================================================================"
-        echo "  IMPORTANT: SAVE THIS DEV PASSWORD NOW"
-        echo "  This is the ONLY time the plaintext password is shown."
-        echo "----------------------------------------------------------------"
-        echo "  Username: $DEV_USER"
-        echo "  Password: $DEV_PASSWORD"
-        echo "================================================================"
-        echo ""
-    fi
+    echo "[OK] users_database.yml generated/verified for user: ${ADMIN_USER}"
 fi
 
 echo ""
 echo "All secrets written to $ENV_FILE"
 echo "BCrypt hash stored in $HASH_FILE (kept out of .env to avoid Docker Compose issues)"
 echo "Complete authelia.yml generated"
-echo "users_database.yml created for file-based authentication"
+echo "users_database.yml verified for file-based authentication"
 echo ""
 echo "Next steps:"
 echo "  1. Review generated files (authelia.yml, users_database.yml)"
