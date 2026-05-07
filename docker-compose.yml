@@ -53,14 +53,13 @@ services:
           cat > /config/users_database.yml << 'EOF'
 ---
 users:
-  CHANGE_ME_USERNAME:
+   CHANGE_ME_USERNAME:
     disabled: false
     displayname: 'CHANGE_ME - Set your display name'
     password: 'CHANGE_ME_GENERATE_A_VALID_HASH_FOR_YOUR_USER'
     email: 'CHANGE_ME@example.com'
     groups:
-      - 'admins'
-      - 'dev'
+      - 'CHANGE_ME_GROUP'
 EOF
         fi
         exec authelia --config /config/configuration.yml
