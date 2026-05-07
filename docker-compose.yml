@@ -53,11 +53,11 @@ services:
           cat > /config/users_database.yml << 'EOF'
 ---
 users:
-  admin:
+  CHANGE_ME_USERNAME:
     disabled: false
-    displayname: 'Admin User'
-    password: '$argon2id$v=19$m=65536,t=3,p=4$BpLnfgDsc2WD8F2q$o/vzA4myCqZZ36bUGsDY//8mKUYNZZaR0t4MFFSs+iM'
-    email: 'admin@example.com'
+    displayname: 'CHANGE_ME - Set your display name'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$BpLnfgDsc2WD8F2q$o/vzA4myCqZZ36bUGsDY//8mKUYNZZaR0t4MFFSs+iM'  # TODO: Generate hash for 'StarTech.com!'
+    email: 'CHANGE_ME@example.com'
     groups:
       - 'admins'
       - 'dev'
