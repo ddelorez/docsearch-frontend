@@ -143,32 +143,42 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 
 ## Step 4: Configure Environment Variables
 
+### What You Need to Set
+
+For a typical Docker Compose deployment, configure these variables:
+
+| Variable | What to set | Example |
+|----------|-------------|---------|
+| `AUTH_COOKIE_DOMAIN` | Your production domain | `docsearch.example.com` |
+| `AUTHELIA_SESSION_DOMAIN` | **For Docker:** the internal hostname `authelia` | `authelia` |
+| `OIDC_ISSUER_URL` | Public HTTPS URL to Authelia | `https://docsearch.example.com/authelia` |
+| `AUTHELIA_INTERNAL_URL` | **For Docker:** internal HTTP URL | `http://authelia:9091` |
+| `AUTHELIA_PUBLIC_URL` | Public HTTPS URL for browser redirects | `https://docsearch.example.com/authelia` |
+| `SECRET_KEY` | Generate a random 64-character hex string | (see below) |
+| `ADMIN_PASSWORD` | Strong password for the admin account | `YourStrongPassword` |
+
+**Non-Docker / external deployments:** Skip `AUTHELIA_INTERNAL_URL` and set `AUTHELIA_SESSION_DOMAIN` to the same value as `AUTH_COOKIE_DOMAIN`.
+
+### Generating Secure Secrets
+
+Run these commands to generate random secrets:
+
 ```bash
-cp .env.example .env
-nano .env
+python3 -c "import secrets; print('SECRET_KEY:', secrets.token_hex(32))"
+python3 -c "import secrets; print('SESSION_SECRET:', secrets.token_hex(32))"
+python3 -c "import secrets; print('OIDC_HMAC_SECRET:', secrets.token_hex(16))"
+python3 -c "import secrets; print('OIDC_CLIENT_SECRET:', secrets.token_hex(32))"
+python3 -c "import secrets; print('AUTHELIA_STORAGE_ENCRYPTION_KEY:', secrets.token_hex(32))"
+python3 -c "import secrets; print('RESET_PASSWORD_JWT_SECRET:', secrets.token_hex(32))"
 ```
 
-Fill in the generated values:
+Copy the generated values into your `.env` file.
 
-| Variable | Description |
-|----------|-------------|
-| `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP address. |
-| `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
-| `OIDC_ISSUER_URL` | **Public-facing** Authelia base URL (HTTPS, e.g. `https://docsearch.example.com/authelia`). Used for browser redirects and as the issuer identifier in ID tokens. |
-| `AUTHELIA_INTERNAL_URL` | **Internal Docker network URL** for Authelia (HTTP, e.g. `http://authelia:9091`). Used for server-to-server OIDC discovery to avoid TLS errors with self-signed certs. **Required** in Docker Compose setups. |
-| `AUTHELIA_PUBLIC_URL` | Public URL for browser OIDC login redirects (e.g. `https://docsearch.example.com/authelia`). Must match the nginx proxy path. |
-| `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
-| `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
-| `OIDC_VERIFY_SSL` | Set to `false` when using self-signed certificates. The frontend uses this flag for token/userinfo requests. |
-| `ADMIN_USERNAME` | File-based Authelia username (default: `admin`). Used by `generate-secrets.sh` to build `users_database.yml`. |
-| `ADMIN_PASSWORD` | **Required for file auth.** Plaintext password — auto-hashed to Argon2id by the script. |
-| `ADMIN_EMAIL` | Admin user email address. |
-| `ADMIN_DISPLAYNAME` | Admin user display name. |
-| `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
-| `SECRET_KEY` | FastAPI session signing key (random hex, >= 32 bytes) |
-| `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
-| `HOST` | `0.0.0.0` (bind to all interfaces) |
-| `PORT` | `8000` (container port) |
+### After editing `.env`
+
+```bash
+./scripts/generate-secrets.sh
+```
 
 ---
 
@@ -181,6 +191,7 @@ To support both paths:
 - **`OIDC_ISSUER_URL`** — public HTTPS base URL (e.g. `https://docsearch.example.com/authelia`). This becomes the *issuer* identifier in ID tokens and is used for browser redirects.
 - **`AUTHELIA_INTERNAL_URL`** — internal HTTP base URL (e.g. `http://authelia:9091`). The frontend uses this for OIDC discovery, token exchange, and userinfo calls.
 - **`AUTHELIA_PUBLIC_URL`** — also HTTPS, used to construct the login redirect (authorization endpoint). Typically the same as `OIDC_ISSUER_URL`.
+- **`AUTHELIA_SESSION_DOMAIN`** — the domain for Authelia's session cookies. **For Docker Compose, set this to the internal hostname** (`authelia`) so OIDC discovery on `http://authelia:9091` (with `X-Forwarded-Proto: https`) matches the session cookie domain. For external HTTPS deployments, use your public domain (usually same as `AUTH_COOKIE_DOMAIN`). Defaults to `AUTH_COOKIE_DOMAIN` if unset.
 
 The frontend automatically sends the `X-Forwarded-Proto: https` header on all internal calls so that Authelia treats them as secure, satisfying its OIDC requirement that the issuer use HTTPS.
 

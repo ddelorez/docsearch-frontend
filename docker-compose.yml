@@ -26,6 +26,9 @@ services:
       # Internal Docker URL for server-to-server OIDC discovery.
       # Uses HTTP to avoid SSL certificate issues with self-signed Authelia certs.
       - AUTHELIA_INTERNAL_URL=http://authelia:9091
+      # Session cookie domain must match the internal hostname when using
+      # X-Forwarded-Proto headers with Docker networking.
+      - AUTHELIA_SESSION_DOMAIN=authelia
 
   # ── Authelia Identity Provider ──────────────────────────────────────────────
   authelia:

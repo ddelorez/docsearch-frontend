@@ -253,25 +253,57 @@ mypy app/ --ignore-missing-imports --warn-unused-ignores --python-version 3.12
 
 ## Environment Variables Reference
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OIDC_ISSUER_URL` | Yes | — | Public-facing Authelia base URL (HTTPS, no trailing slash) |
-| `AUTHELIA_INTERNAL_URL` | No | `""` | Internal Docker HTTP URL for server-to-server OIDC discovery (e.g. `http://authelia:9091`). Avoids SSL errors with self-signed certificates. |
-| `AUTHELIA_PUBLIC_URL` | No | `""` | Public URL for browser OIDC login redirects. Must match nginx proxy path. |
-| `OIDC_CLIENT_ID` | Yes | — | OIDC client ID |
-| `OIDC_CLIENT_SECRET` | Yes | — | OIDC client secret (plain text) |
-| `OIDC_VERIFY_SSL` | No | `true` | Whether to verify SSL certs for OIDC provider. Set `false` for self-signed certs (deprecated in favour of `AUTHELIA_INTERNAL_URL`). |
-| `ADMIN_USERNAME` | No | `admin` | File-based Authelia username (used by `generate-secrets.sh` to build `users_database.yml`). |
-| `ADMIN_PASSWORD` | Yes (for file auth) | — | Plaintext password for the admin user. Auto-hashed to Argon2id by `generate-secrets.sh` — never stored in `users_database.yml`. |
-| `ADMIN_EMAIL` | No | `<admin>@example.com` | Admin user email address. |
-| `ADMIN_DISPLAYNAME` | No | `Administrator` | Admin user display name. |
-| `AUTHELIA_DEV_USERNAME` | No | `""` | (Optional) Legacy dev username — kept for backward compatibility. Not used by the current `generate-secrets.sh` flow. |
-| `AUTHELIA_DEV_PASSWORD` | No | `""` | (Optional) Legacy dev password — kept for backward compatibility. Not used by the current `generate-secrets.sh` flow. |
-| `RAG_SERVICE_URL` | No | `http://rag-01:8000` | RAG backend base URL |
-| `SECRET_KEY` | Yes | — | Session signing key (random hex, >= 32 bytes) |
-| `ALLOWED_AD_GROUPS` | No | `""` (all) | Comma-separated AD groups allowed access |
-| `HOST` | No | `0.0.0.0` | Uvicorn bind host |
-| `PORT` | No | `8000` | Uvicorn bind port |
+### Quick Setup (Non-Technical Users)
+
+For most users, just set these **4 required variables** in your `.env` file:
+
+```env
+# Your domain (use localhost for local dev)
+AUTH_COOKIE_DOMAIN=localhost
+
+# For Docker: keep these as-is. For production, change to your HTTPS URL.
+OIDC_ISSUER_URL=https://localhost/authelia
+AUTHELIA_INTERNAL_URL=http://authelia:9091
+AUTHELIA_SESSION_DOMAIN=authelia
+
+# Generate these with: python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=changeme-replace-with-real-secret
+ADMIN_PASSWORD=YourStrongPassword
+```
+
+Then run `./scripts/generate-secrets.sh` and `docker compose up -d`.
+
+---
+
+### Full Reference
+
+| Variable | Required? | Default | Description |
+|----------|-----------|---------|-------------|
+| `AUTH_COOKIE_DOMAIN` | **Yes** | — | Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP. |
+| `AUTHELIA_SESSION_DOMAIN` | Docker only | `AUTH_COOKIE_DOMAIN` | **Important for Docker:** Set to `authelia` (the container hostname) so discovery works. For external HTTPS, use your public domain. |
+| `OIDC_ISSUER_URL` | **Yes** | — | Public Authelia URL (HTTPS). This appears in ID tokens and browser redirects. |
+| `AUTHELIA_INTERNAL_URL` | **Docker only** | — | Internal Docker network URL (HTTP, e.g. `http://authelia:9091`). Skip this for external deployments. |
+| `AUTHELIA_PUBLIC_URL` | No | `OIDC_ISSUER_URL` | Public URL for login redirects. Usually the same as `OIDC_ISSUER_URL`. |
+| `OIDC_CLIENT_ID` | Yes | — | OIDC client ID (`docsearch-frontend`) |
+| `OIDC_CLIENT_SECRET` | Yes | — | OIDC client secret |
+| `OIDC_VERIFY_SSL` | No | `true` | Set `false` only for self-signed certs in dev. |
+| `ADMIN_USERNAME` | File auth only | `admin` | Authelia admin username |
+| `ADMIN_PASSWORD` | File auth only | — | Admin password (plaintext). The script hashes it automatically. |
+| `ADMIN_EMAIL` | File auth only | `<user>@example.com` | Admin email address |
+| `ADMIN_DISPLAYNAME` | File auth only | `Administrator` | Admin display name |
+| `SECRET_KEY` | **Yes** | — | FastAPI session signing key (32+ hex chars) |
+| `SESSION_SECRET` | Yes | — | Authelia session secret (64 hex chars) |
+| `OIDC_HMAC_SECRET` | Yes | — | OIDC HMAC secret (32+ hex chars) |
+| `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Yes** | — | Authelia storage encryption key (32+ hex chars) |
+| `RESET_PASSWORD_JWT_SECRET` | Yes | — | JWT secret for password reset feature |
+| `RAG_SERVICE_URL` | No | `http://rag-01:8000` | Backend RAG API URL |
+| `ALLOWED_AD_GROUPS` | No | (all) | Comma-separated AD groups allowed to log in |
+| `HOST` | No | `0.0.0.0` | Frontend bind host |
+| `PORT` | No | `8000` | Frontend bind port |
+| `AUTHELIA_DEV_USERNAME` | No | — | Legacy dev username (not used by current script) |
+| `AUTHELIA_DEV_PASSWORD` | No | — | Legacy dev password (not used) |
+| `AUTHELIA_DEV_DISPLAYNAME` | No | — | Legacy dev display name (not used) |
+| `AUTHELIA_DEV_EMAIL` | No | — | Legacy dev email (not used) |
 
 ---
 

@@ -177,6 +177,18 @@ else
     set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
 fi
 
+# ── Session cookie domain ────────────────────────────────────────────────────
+# This domain is used by Authelia's session cookies. In Docker environments,
+# set it to the internal hostname (e.g. "authelia") so OIDC discovery works
+# with X-Forwarded-Proto: https. Defaults to AUTH_COOKIE_DOMAIN if not set.
+AUTHELIA_SESSION_DOMAIN=$(get_env AUTHELIA_SESSION_DOMAIN)
+if [ -z "$AUTHELIA_SESSION_DOMAIN" ]; then
+    AUTHELIA_SESSION_DOMAIN="$COOKIE_DOMAIN"
+    set_env "AUTHELIA_SESSION_DOMAIN" "$AUTHELIA_SESSION_DOMAIN"
+else
+    echo "[OK] AUTHELIA_SESSION_DOMAIN (already set: $AUTHELIA_SESSION_DOMAIN)"
+fi
+
 # ── Generate secrets only if missing ─────────────────────────────────────────
 AUTHELIA_STORAGE_ENCRYPTION_KEY=$(get_env AUTHELIA_STORAGE_ENCRYPTION_KEY)
 if [ -z "$AUTHELIA_STORAGE_ENCRYPTION_KEY" ]; then
@@ -343,6 +355,7 @@ fi
 
 # ── Ensure authelia.yml is a writable file (handle stale dirs/perms from prior runs) ─
 export COOKIE_DOMAIN
+export AUTHELIA_SESSION_DOMAIN
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
 export RESET_PASSWORD_JWT_SECRET
 export OIDC_HMAC_SECRET
@@ -431,6 +444,7 @@ def literal_str_representer(dumper, data):
 yaml.add_representer(LiteralStr, literal_str_representer)
 
 cookie_domain              = os.environ["COOKIE_DOMAIN"]
+session_domain             = os.environ.get("AUTHELIA_SESSION_DOMAIN", cookie_domain)
 storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
 reset_password_jwt_secret  = os.environ["RESET_PASSWORD_JWT_SECRET"]
 hmac_secret                = os.environ["OIDC_HMAC_SECRET"]
@@ -458,7 +472,7 @@ config = {
         "inactivity": "5m",
         "remember_me": "1M",
         "cookies": [{
-            "domain": cookie_domain,
+            "domain": session_domain,
             "authelia_url": authelia_url,
             "default_redirection_url": default_redirection_url,
         }],
@@ -515,13 +529,16 @@ assert key.startswith("-----BEGIN"), f"PEM header missing: {key[:30]!r}"
 assert key.rstrip().endswith("-----"), f"PEM footer missing: {key[-30:]!r}"
 assert "BEGIN PRIVATE KEY" in key or "BEGIN RSA PRIVATE KEY" in key, \
     "Not a valid PEM private key"
-assert verify["session"]["cookies"][0]["domain"] == cookie_domain
 assert verify["storage"]["encryption_key"] == storage_key
 assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret
 cookie = verify["session"]["cookies"][0]
+assert cookie["domain"] == session_domain, f"Session domain mismatch: {cookie['domain']} != {session_domain}"
+assert cookie["authelia_url"] == authelia_url
+assert cookie["default_redirection_url"] == default_redirection_url
 assert cookie["authelia_url"] != cookie["default_redirection_url"]
 assert cookie["authelia_url"].endswith("/authelia/")
 print(f"[OK] authelia.yml generated — authelia_url={cookie['authelia_url']}")
+print(f"[OK] Session cookie domain: {cookie['domain']}")
 print(f"[OK] PEM key block scalar: {len(key.splitlines())} lines")
 PYEOF
 
