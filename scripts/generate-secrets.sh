@@ -48,7 +48,8 @@ set_env() {
     
     if [ -z "$existing_val" ]; then
         # Key doesn't exist — append
-        echo "${key}=${value}" >> "$ENV_FILE"
+        # Use printf to avoid bash re-expanding $ characters in $value
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
         echo "  [SET] $key (new)"
     elif [[ "$existing_val" == changeme-* ]] && [ "$FORCE_REGENERATE" = false ]; then
         # Placeholder — overwrite
@@ -93,7 +94,8 @@ get_env() {
     if [[ "$val" == changeme-* ]]; then
         echo ""
     else
-        echo "$val"
+        # printf avoids bash re-interpreting $ sequences in $val
+        printf '%s\n' "$val"
     fi
 }
 
@@ -569,6 +571,12 @@ ADMIN_USER=$(get_env ADMIN_USERNAME)
 ADMIN_PASS=$(get_env ADMIN_PASSWORD)
 ADMIN_EMAIL_VAL=$(get_env ADMIN_EMAIL)
 ADMIN_DISPLAY_VAL=$(get_env ADMIN_DISPLAYNAME)
+
+# Migration: remove stale ADMIN_PASSWORD_HASH from .env (it's no longer stored
+# there — the hash lives in users_database.yml only).  Leaving it in .env causes
+# Docker Compose to interpret $argon2id$, $v, $m, etc. as undefined variables,
+# producing WARN[0000] spam on every compose operation.
+sed -i '/^ADMIN_PASSWORD_HASH=/d' "$ENV_FILE" 2>/dev/null || true
 
 # Apply defaults
 ADMIN_USER="${ADMIN_USER:-admin}"
