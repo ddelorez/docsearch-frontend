@@ -96,11 +96,17 @@ chmod +x scripts/generate-secrets.sh
 ```
 
 The script will:
-1. Copy `.env.example` → `.env` and `authelia.example.yml` → `authelia.yml` (if they don't exist)
-2. Prompt for your cookie domain (e.g., `docsearch.example.com` or `127.0.0.1`)
+1. Copy `.env.example` → `.env` (if it doesn't exist)
+2. Populate all missing secrets in `.env` (skips values that are already set)
 3. Generate all required secrets and write them to `.env`
 4. Generate a 2048-bit RSA key and embed it directly into `authelia.yml`
-5. Set proper file permissions on `authelia.yml` (chmod 600)
+5. Generate self-signed TLS certs in `certs/` (if missing)
+6. Build `users_database.yml` from `ADMIN_*` variables in `.env`
+7. Set proper file permissions
+
+The script is **idempotent**: re-running it skips secrets and files that already have real values. Use `--force` to regenerate everything.
+
+> **Important:** Before running the script on a fresh checkout, set `ADMIN_PASSWORD_HASH` in your `.env` file with a pre-computed Argon2id hash. See [Step 5: Configure Authelia Authentication](#step-5-configure-authelia-authentication) below.
 
 Or generate manually:
 
@@ -148,15 +154,20 @@ Fill in the generated values:
 |----------|-------------|
 | `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP address. |
 | `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
-| `OIDC_ISSUER_URL` | Internal Authelia URL: `http://authelia:9091` |
+| `OIDC_ISSUER_URL` | Public-facing Authelia URL (HTTPS, e.g. `https://docsearch.example.com/authelia`). Used for browser redirects. |
+| `AUTHELIA_INTERNAL_URL` | Internal Docker-network URL for server-to-server OIDC discovery (e.g. `http://authelia:9091`). Avoids SSL errors with self-signed certs. |
+| `AUTHELIA_PUBLIC_URL` | Public URL for browser OIDC login redirects. Must match nginx proxy path. |
 | `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
 | `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
-| `OIDC_CLIENT_SECRET_HASH` | BCrypt hash of `OIDC_CLIENT_SECRET` |
 | `SESSION_SECRET` | 64 hex character session secret |
 | `OIDC_HMAC_SECRET` | 32+ character HMAC secret |
 | `SECRET_KEY` | FastAPI session signing key (random hex) |
 | `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
 | `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
+| `ADMIN_USERNAME` | File-based Authelia username (default: `admin`). Used by `generate-secrets.sh` to build `users_database.yml`. |
+| `ADMIN_PASSWORD_HASH` | **Required for file auth.** Pre-computed Argon2id hash. See Step 5 for how to generate. |
+| `ADMIN_EMAIL` | Admin user email address. |
+| `ADMIN_DISPLAYNAME` | Admin user display name. |
 | `HOST` | `0.0.0.0` (bind to all interfaces) |
 | `PORT` | `8000` (container port) |
 
@@ -166,29 +177,56 @@ Fill in the generated values:
 
 ### Option A: File-Based Users (Development / Small Deployments)
 
-1. Edit `users_database.yml`:
+The `generate-secrets.sh` script automatically creates `users_database.yml` from `.env` variables. You only need to provide an Argon2id password hash.
 
-```bash
-nano users_database.yml
-```
+1. **Generate a password hash:**
 
-2. Add a user:
+   ```bash
+   docker run --rm authelia/authelia authelia crypto hash generate argon2 \
+     --password 'YourStrongPassword' --random-salt \
+     --iterations 3 --memory 65536 --parallelism 4
+   ```
 
-```yaml
-users:
-  admin:
-    displayname: "Admin User"
-    password: "$argon2id$v=19$m=65536,t=3,p=1$..." # generated hash
-    groups:
-      - admins
-      - docsearch-users
-```
+2. **Set admin variables in `.env`:**
 
-3. Generate password hashes:
+   ```env
+   ADMIN_USERNAME=admin
+   ADMIN_PASSWORD_HASH=$argon2id$v=19$m=65536,t=3,p=4$...   # paste the hash from step 1
+   ADMIN_EMAIL=admin@example.com
+   ADMIN_DISPLAYNAME=Administrator
+   ```
 
-```bash
-docker run --rm authelia/authelia authelia crypto hash generate argon2 --password 'your-secure-password'
-```
+3. **Run the script to generate `users_database.yml`:**
+
+   ```bash
+   ./scripts/generate-secrets.sh
+   ```
+
+   The script validates that `ADMIN_PASSWORD_HASH` is a valid Argon2id hash and will fail with a clear error if it's missing or malformed.
+
+4. **Adding additional users:**
+
+   Edit `users_database.yml` directly (it is gitignored). Generate additional hashes with the same `docker run` command from step 1, then append user blocks:
+
+   ```yaml
+   users:
+     admin:
+       disabled: false
+       displayname: 'Administrator'
+       password: '$argon2id$v=19$...'
+       email: 'admin@example.com'
+       groups:
+         - 'admins'
+     newuser:
+       disabled: false
+       displayname: 'New User'
+       password: '$argon2id$v=19$...'
+       email: 'newuser@example.com'
+       groups:
+         - 'docsearch-users'
+   ```
+
+   > **Note:** If you manually edit `users_database.yml` and then re-run `generate-secrets.sh`, the script will detect existing user data and skip overwriting it (unless `--force` is passed).
 
 ### Option B: Active Directory / LDAP (Production)
 
@@ -376,4 +414,4 @@ docker compose pull
 docker compose up -d --remove-orphans
 ```
 
-> **Note:** The `authelia.yml` file contains embedded secrets and is gitignored. After pulling updates, verify your `authelia.yml` still has the correct configuration and re-run `./scripts/generate-secrets.sh` if new secrets are required.
+> **Note:** `authelia.yml` contains embedded secrets and is gitignored. `users_database.yml` is also gitignored and managed by `generate-secrets.sh`. After pulling updates, verify both files are still correct and re-run `./scripts/generate-secrets.sh` if needed.
