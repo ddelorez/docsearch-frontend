@@ -124,8 +124,9 @@ docker compose down -v
 
 2. **Configure Authelia:**
    - Copy `.env.example` to `.env` and fill in generated values
-   - The `users_database.yml` file is auto-created on first run and persisted
+   - The `users_database.yml` file is auto-created on first run with a default user and persisted
      in a Docker named volume — no manual setup needed
+   - **Default credentials**: `admin` / `authelia` (change in production!)
    - For development without AD, Authelia uses file-based users (see Authelia docs)
    - For AD integration, uncomment and configure `authentication_backend.ldap` in `authelia.yml`
 
