@@ -33,7 +33,6 @@ services:
     container_name: docsearch-authelia
     restart: unless-stopped
     volumes:
-      - authelia-config:/config
       - ./authelia.yml:/config/configuration.yml:ro
       - ./users_database.yml:/config/users_database.yml:ro
       - authelia-data:/var/lib/authelia
@@ -90,7 +89,6 @@ services:
 volumes:
   redis-data:
   authelia-data:
-  authelia-config:
 
 networks:
   internal:

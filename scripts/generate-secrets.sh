@@ -16,18 +16,6 @@ for arg in "$@"; do
     esac
 done
 
-# ── Cleanup trap for temporary argon2 venv (if created) ──────────────────────
-TMP_VENV_DIR=""
-cleanup_tmp_venv() {
-    local rc=$?
-    if [ -n "${TMP_VENV_DIR:-}" ] && [ -d "${TMP_VENV_DIR:-}" ]; then
-        rm -rf "$TMP_VENV_DIR" 2>/dev/null || true
-        echo "[OK] Cleaned up temporary venv: $TMP_VENV_DIR"
-    fi
-    return $rc
-}
-trap cleanup_tmp_venv EXIT
-
 # ── Handle stale users_database.yml directory early (Docker bind-mount artifact) ─
 USERS_FILE="users_database.yml"
 if [ -d "$USERS_FILE" ]; then
@@ -48,11 +36,48 @@ echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
 # ── Check if Docker containers are running (bind-mounts can interfere) ────────
-if docker ps | grep -q docsearch; then
-    echo "[WARN] DocSearch containers appear to be running. Bind-mounts may interfere with file generation."
-    echo "        Consider stopping containers first: docker compose down"
-    echo "        Press Enter to continue anyway, or Ctrl+C to abort."
-    read -r || exit 1
+if command -v docker &>/dev/null && docker ps | grep -q docsearch; then
+    echo "[WARN] DocSearch containers appear to be running. Bind-mounts will interfere with file generation."
+    echo "        Attempting to stop containers automatically..."
+    if docker compose down; then
+        echo "[OK] Containers stopped."
+    else
+        echo "[ERROR] Failed to stop containers automatically."
+        echo "        Please stop them manually: docker compose down"
+        echo "        Then re-run this script."
+        exit 1
+    fi
+fi
+
+# ── Determine sudo prefix (not needed if already root) ───────────────────────
+if [ "$(id -u)" -eq 0 ]; then
+    SUDO=""
+elif command -v sudo &>/dev/null; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
+# ── Ensure pip is available ───────────────────────────────────────────────────
+if ! command -v pip3 &>/dev/null && ! python3 -m pip --version &>/dev/null 2>&1; then
+    echo "[INFO] pip not found — installing python3-pip..."
+    if ! $SUDO apt-get update -q && $SUDO apt-get install -y python3-pip; then
+        echo "[ERROR] Failed to install python3-pip."
+        echo "        Please install it manually: sudo apt install python3-pip"
+        exit 1
+    fi
+    echo "[OK] python3-pip installed"
+fi
+
+# ── Ensure PyYAML is available for authelia.yml generation ───────────────────
+if ! python3 -c "import yaml" 2>/dev/null; then
+    echo "[INFO] Installing PyYAML for authelia.yml generation..."
+    if ! python3 -m pip install --break-system-packages PyYAML; then
+        echo "[ERROR] Failed to install PyYAML."
+        echo "        Please install it manually: pip install --break-system-packages PyYAML"
+        exit 1
+    fi
+    echo "[OK] PyYAML installed"
 fi
 
 # ── Ensure argon2-cffi is available for password hashing ─────────────────────
@@ -60,8 +85,7 @@ if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
     echo "[INFO] Installing argon2-cffi for password hashing..."
     if ! python3 -m pip install --break-system-packages argon2-cffi; then
         echo "[ERROR] Failed to install argon2-cffi."
-        echo "        Try installing manually with: pip install --break-system-packages argon2-cffi"
-        echo "        Or install the system package: sudo apt install python3-argon2 (note: may not be compatible)"
+        echo "        Please install it manually: pip install --break-system-packages argon2-cffi"
         exit 1
     fi
     echo "[OK] argon2-cffi installed"
@@ -555,22 +579,12 @@ has_real_users() {
 
 argon2_hash_password() {
     # Hashes $1 using argon2id with authelia-matching parameters.
-    # Installs argon2-cffi on the host if not available, then generates the hash.
+    # Relies on argon2-cffi being pre-installed (handled before script execution).
     local password="$1"
 
     if ! command -v python3 >/dev/null 2>&1; then
         echo "[ERROR] python3 not found on PATH — required for Argon2 hashing."
         return 1
-    fi
-
-    # Check if argon2-cffi is available
-    if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
-        echo "[INFO] Installing argon2-cffi on the host..."
-        if ! python3 -m pip install argon2-cffi; then
-            echo "[ERROR] Failed to install argon2-cffi. Please install it manually: pip install argon2-cffi"
-            return 1
-        fi
-        echo "[OK] argon2-cffi installed"
     fi
 
     # Generate the hash

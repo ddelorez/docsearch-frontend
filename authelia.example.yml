@@ -13,7 +13,7 @@ storage:
 
 identity_validation:
   reset_password:
-    jwt_secret: ${AUTHELIA_RESET_PASSWORD_JWT_SECRET}
+    jwt_secret: ${RESET_PASSWORD_JWT_SECRET}
 
 session:
   name: authelia_session
