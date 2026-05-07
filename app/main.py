@@ -23,6 +23,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from authlib.integrations.starlette_client import OAuth
@@ -48,23 +49,33 @@ logger = logging.getLogger(__name__)
 oauth = OAuth()
 
 
-def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, Any]:
-    """Fetch the OIDC discovery document, honouring the SSL-verify flag.
+def _fetch_server_metadata(discovery_url: str, verify_ssl: bool, issuer_url: str = "") -> dict[str, Any]:
+    """Fetch the OIDC discovery document with correct Host and X-Forwarded-Proto headers.
 
     When discovery_url points to the internal Authelia instance (http://authelia:9091),
-    we set ``X-Forwarded-Proto: https`` so that Authelia generates URLs with the
-    correct HTTPS scheme even though the transport is HTTP. This avoids the
-    "invalid X-Forwarded-Proto header value 'http'" error.
+    Authelia uses both the Host header and X-Forwarded-Proto to form the issuer URL.
+    We must send:
+      - X-Forwarded-Proto: https  (so Authelia knows the external scheme is HTTPS)
+      - Host: <public domain>     (so Authelia forms https://<public domain>, which
+                                   matches the session cookie config domain)
+    Without the correct Host header, Authelia forms https://authelia:9091 which
+    matches no session cookie config and returns 500.
     """
+    headers: dict[str, str] = {"X-Forwarded-Proto": "https"}
+
+    if issuer_url:
+        parsed = urlparse(issuer_url)
+        host = parsed.hostname  # e.g. "sgisearch.sgi01.local"
+        if host:
+            headers["Host"] = host
+            logger.debug("OIDC discovery: using Host header '%s'", host)
+
     if not verify_ssl:
         logger.warning(
             "OIDC SSL verification is DISABLED for discovery fetch (%s). "
             "This should only be used in internal/dev environments.",
             discovery_url,
         )
-    # Always tell Authelia the original request was HTTPS; this satisfies
-    # Authelia's OIDC requirement that the issuer URL uses HTTPS.
-    headers: dict[str, str] = {"X-Forwarded-Proto": "https"}
     with httpx.Client(verify=verify_ssl, timeout=10.0, headers=headers) as client:
         response = client.get(discovery_url)
         response.raise_for_status()
@@ -72,19 +83,24 @@ def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, An
 
 
 def _register_oidc(settings: Any) -> None:
+    # Extract the public hostname for Host header overrides on internal calls.
+    # Required because Authelia uses Host + X-Forwarded-Proto to form the issuer
+    # URL, which must match the session cookie domain configuration.
+    parsed_issuer = urlparse(settings.oidc_issuer_url)
+    issuer_host = parsed_issuer.hostname or ""  # e.g. "sgisearch.sgi01.local"
+
     client_kwargs: dict[str, Any] = {
         "scope": "openid email profile groups",
         "response_type": "code",
-        # Applied to the runtime OAuth httpx client (token/userinfo calls).
-        # When AUTHELIA_INTERNAL_URL is set, these calls go over HTTP so SSL
-        # verification is moot; the flag is kept for correctness.
         "verify": settings.oidc_verify_ssl,
+        # Set Host + X-Forwarded-Proto on all OAuth calls (token, userinfo).
+        # The internal Authelia URL is HTTP; these headers ensure Authelia
+        # treats the requests as coming from the public HTTPS domain.
+        "headers": {
+            "X-Forwarded-Proto": "https",
+            **({"Host": issuer_host} if issuer_host else {}),
+        },
     }
-
-    # Always send X-Forwarded-Proto: https so Authelia accepts the request.
-    # This is required even for internal Docker network requests where the
-    # transport is HTTP, because Authelia rejects X-Forwarded-Proto: http.
-    client_kwargs.setdefault("headers", {})["X-Forwarded-Proto"] = "https"
 
     # If a public Authelia URL is configured, override the authorization
     # endpoint so the browser is redirected to the externally reachable URL
@@ -92,13 +108,6 @@ def _register_oidc(settings: Any) -> None:
     if settings.authelia_public_url:
         client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
 
-    # Pre-fetch the discovery document so we control SSL verification.
-    # ``settings.oidc_discovery_url`` uses AUTHELIA_INTERNAL_URL when
-    # available (HTTP on the Docker network), avoiding SSL certificate
-    # errors with self-signed Authelia certificates. If the OIDC provider
-    # is unreachable at startup (e.g. in CI without a real Authelia
-    # instance), fall back to ``server_metadata_url`` so the app can still
-    # start; Authlib will retry the fetch lazily on first use.
     register_kwargs: dict[str, Any] = {
         "name": "authelia",
         "client_id": settings.oidc_client_id,
@@ -107,26 +116,36 @@ def _register_oidc(settings: Any) -> None:
     }
     try:
         register_kwargs["server_metadata"] = _fetch_server_metadata(
-            settings.oidc_discovery_url, settings.oidc_verify_ssl
+            settings.oidc_discovery_url,
+            settings.oidc_verify_ssl,
+            settings.oidc_issuer_url,  # provides correct Host header
         )
+
         # ── Internal endpoint rewriting ────────────────────────────────────
-        # The discovery fetch used X-Forwarded-Proto: https so Authelia returns
-        # HTTPS URLs for token/userinfo/jwks endpoints. We need those endpoints
-        # to be reachable on the internal Docker network (HTTP), so swap the
-        # scheme from https → http for the internal host.
-        md = register_kwargs["server_metadata"]
-        internal_host = "authelia:9091"
-        for key in [
-            "token_endpoint",
-            "userinfo_endpoint",
-            "jwks_uri",
-            "revocation_endpoint",
-            "introspection_endpoint",
-            "registration_endpoint",
-        ]:
-            if key in md:
-                md[key] = md[key].replace(f"https://{internal_host}", f"http://{internal_host}")
-        # Keep issuer as reported (HTTPS) — token's iss claim must match this.
+        # Discovery was fetched with Host: <public domain>, so Authelia
+        # returns public HTTPS URLs, e.g.:
+        #   https://sgisearch.sgi01.local/api/oidc/token
+        # Rewrite these to the internal HTTP URL so the frontend can reach
+        # them over the Docker network without TLS issues:
+        #   http://authelia:9091/api/oidc/token
+        if settings.authelia_internal_url:
+            md = register_kwargs["server_metadata"]
+            public_base = f"{parsed_issuer.scheme}://{parsed_issuer.netloc}"
+            internal_base = settings.authelia_internal_url.rstrip("/")
+            for key in [
+                "token_endpoint",
+                "userinfo_endpoint",
+                "jwks_uri",
+                "revocation_endpoint",
+                "introspection_endpoint",
+                "registration_endpoint",
+            ]:
+                if key in md:
+                    md[key] = md[key].replace(public_base, internal_base)
+            logger.debug(
+                "OIDC endpoints rewritten: %s → %s", public_base, internal_base
+            )
+
     except Exception as exc:
         logger.warning(
             "Failed to pre-fetch OIDC discovery document from %s: %s. "

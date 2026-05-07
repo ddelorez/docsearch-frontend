@@ -186,29 +186,7 @@ else
     set_env "AUTH_COOKIE_DOMAIN" "$COOKIE_DOMAIN"
 fi
 
-# ── Session cookie domain ────────────────────────────────────────────────────
-# This domain is used by Authelia's session cookies. In Docker environments,
-# set it to the internal hostname (e.g. "authelia") so OIDC discovery works
-# with X-Forwarded-Proto: https. Defaults to AUTH_COOKIE_DOMAIN if not set.
-AUTHELIA_SESSION_DOMAIN=$(get_env AUTHELIA_SESSION_DOMAIN)
-if [ -z "$AUTHELIA_SESSION_DOMAIN" ]; then
-    AUTHELIA_SESSION_DOMAIN="$COOKIE_DOMAIN"
-    set_env "AUTHELIA_SESSION_DOMAIN" "$AUTHELIA_SESSION_DOMAIN"
-    echo "[INFO] AUTHELIA_SESSION_DOMAIN defaulted to: $AUTHELIA_SESSION_DOMAIN"
-else
-    echo "[OK] AUTHELIA_SESSION_DOMAIN: $AUTHELIA_SESSION_DOMAIN"
-fi
-
-# Warn if session domain looks wrong for Docker deployments
-if [ "$AUTHELIA_SESSION_DOMAIN" = "$COOKIE_DOMAIN" ] && [ "$COOKIE_DOMAIN" != "localhost" ] && [ "$COOKIE_DOMAIN" != "127.0.0.1" ]; then
-    echo "[INFO] AUTHELIA_SESSION_DOMAIN matches AUTH_COOKIE_DOMAIN."
-    echo "       For Docker Compose deployments, consider setting AUTHELIA_SESSION_DOMAIN=authelia"
-    echo "       so OIDC discovery works over the internal Docker network."
-fi
-
-# ── OIDC issuer URL ───────────────────────────────────────────────────────────
-# This is the public-facing issuer URL. May be empty; Python will default to
-# https://<AUTH_COOKIE_DOMAIN>/authelia if not set.
+# ── OIDC issuer URL (read for reference; not written to authelia.yml) ────────
 OIDC_ISSUER_URL=$(get_env OIDC_ISSUER_URL)
 
 # ── Generate secrets only if missing ─────────────────────────────────────────
@@ -377,8 +355,6 @@ fi
 
 # ── Ensure authelia.yml is a writable file (handle stale dirs/perms from prior runs) ─
 export COOKIE_DOMAIN
-export AUTHELIA_SESSION_DOMAIN
-export OIDC_ISSUER_URL
 export AUTHELIA_STORAGE_ENCRYPTION_KEY
 export RESET_PASSWORD_JWT_SECRET
 export OIDC_HMAC_SECRET
@@ -467,7 +443,6 @@ def literal_str_representer(dumper, data):
 yaml.add_representer(LiteralStr, literal_str_representer)
 
 cookie_domain              = os.environ["COOKIE_DOMAIN"]
-session_domain             = os.environ.get("AUTHELIA_SESSION_DOMAIN", cookie_domain)
 storage_key                = os.environ["AUTHELIA_STORAGE_ENCRYPTION_KEY"]
 reset_password_jwt_secret  = os.environ["RESET_PASSWORD_JWT_SECRET"]
 hmac_secret                = os.environ["OIDC_HMAC_SECRET"]
@@ -495,7 +470,7 @@ config = {
         "inactivity": "5m",
         "remember_me": "1M",
         "cookies": [{
-            "domain": session_domain,
+            "domain": cookie_domain,
             "authelia_url": authelia_url,
             "default_redirection_url": default_redirection_url,
         }],
@@ -555,7 +530,7 @@ assert "BEGIN PRIVATE KEY" in key or "BEGIN RSA PRIVATE KEY" in key, \
 assert verify["storage"]["encryption_key"] == storage_key
 assert verify["identity_validation"]["reset_password"]["jwt_secret"] == reset_password_jwt_secret
 cookie = verify["session"]["cookies"][0]
-assert cookie["domain"] == session_domain, f"Session domain mismatch: {cookie['domain']} != {session_domain}"
+assert cookie["domain"] == cookie_domain, f"Session domain mismatch: {cookie['domain']} != {cookie_domain}"
 assert cookie["authelia_url"] == authelia_url
 assert cookie["default_redirection_url"] == default_redirection_url
 assert cookie["authelia_url"] != cookie["default_redirection_url"]
