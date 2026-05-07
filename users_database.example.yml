@@ -1,0 +1,10 @@
+# Authelia users database — copy to users_database.yml and edit as needed.
+#
+# For production with Active Directory, this file can remain empty;
+# Authelia will use LDAP as the authentication backend instead.
+#
+# To add a local user, generate a BCrypt password hash:
+#   python -c "from passlib.hash import bcrypt; print(bcrypt.hash('YOUR_PASSWORD'))"
+# Then add the user block below.
+---
+users: {}

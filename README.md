@@ -124,6 +124,8 @@ docker compose down -v
 
 2. **Configure Authelia:**
    - Copy `.env.example` to `.env` and fill in generated values
+   - The `users_database.yml` file is auto-created on first run and persisted
+     in a Docker named volume — no manual setup needed
    - For development without AD, Authelia uses file-based users (see Authelia docs)
    - For AD integration, uncomment and configure `authentication_backend.ldap` in `authelia.yml`
 
@@ -242,14 +244,56 @@ mypy app/ --ignore-missing-imports --warn-unused-ignores --python-version 3.12
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OIDC_ISSUER_URL` | Yes | — | Base URL of Authelia (no trailing slash) |
+| `OIDC_ISSUER_URL` | Yes | — | Public-facing Authelia base URL (HTTPS, no trailing slash) |
+| `AUTHELIA_INTERNAL_URL` | No | `""` | Internal Docker HTTP URL for server-to-server OIDC discovery (e.g. `http://authelia:9091`). Avoids SSL errors with self-signed certificates. |
+| `AUTHELIA_PUBLIC_URL` | No | `""` | Public URL for browser OIDC login redirects. Must match nginx proxy path. |
 | `OIDC_CLIENT_ID` | Yes | — | OIDC client ID |
 | `OIDC_CLIENT_SECRET` | Yes | — | OIDC client secret (plain text) |
+| `OIDC_VERIFY_SSL` | No | `true` | Whether to verify SSL certs for OIDC provider. Set `false` for self-signed certs (deprecated in favour of `AUTHELIA_INTERNAL_URL`). |
 | `RAG_SERVICE_URL` | No | `http://rag-01:8000` | RAG backend base URL |
 | `SECRET_KEY` | Yes | — | Session signing key (random hex, >= 32 bytes) |
 | `ALLOWED_AD_GROUPS` | No | `""` (all) | Comma-separated AD groups allowed access |
 | `HOST` | No | `0.0.0.0` | Uvicorn bind host |
 | `PORT` | No | `8000` | Uvicorn bind port |
+
+---
+
+## Local / Self-Hosted Authelia Setup
+
+When Authelia runs inside the same Docker Compose stack with a **self-signed TLS certificate**, the frontend's server-to-server OIDC discovery request (`/.well-known/openid-configuration`) fails with `SSL: CERTIFICATE_VERIFY_FAILED`.
+
+### Recommended Configuration
+
+Use `AUTHELIA_INTERNAL_URL` to point the frontend at Authelia's **internal Docker HTTP address** for metadata discovery, while keeping `OIDC_ISSUER_URL` as the external HTTPS URL for browser redirects:
+
+```env
+# External URL — browser can reach this through nginx
+OIDC_ISSUER_URL=https://sgisearch.sgi01.local/authelia
+
+# Internal Docker URL — frontend container reaches Authelia directly over HTTP
+AUTHELIA_INTERNAL_URL=http://authelia:9091
+
+# Browser redirect URL — must match nginx proxy path
+AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia
+```
+
+### Why This Works
+
+| Traffic Type | URL Used | Protocol | Reason |
+|---|---|---|---|
+| OIDC discovery (`/.well-known/...`) | `AUTHELIA_INTERNAL_URL` | HTTP | Server-to-server, avoids self-signed cert |
+| Token exchange / userinfo | Discovery doc endpoints (HTTP) | HTTP | Authlib uses URLs from the discovery document |
+| Browser login redirect | `AUTHELIA_PUBLIC_URL` | HTTPS | User's browser reaches nginx, not Docker internal |
+
+### Quick Verification
+
+After updating `.env`:
+
+```bash
+docker compose down && docker compose up -d --build
+```
+
+Then test login at `https://sgisearch.sgi01.local`. The frontend logs should show no SSL errors during startup.
 
 Generate a secure `SECRET_KEY`:
 ```bash

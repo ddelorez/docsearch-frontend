@@ -37,6 +37,7 @@ coverage/
 .env
 authelia.yml
 certs/
+users_database.yml
 
 # OS
 .DS_Store

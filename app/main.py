@@ -79,6 +79,8 @@ def _register_oidc(settings: Any) -> None:
         "scope": "openid email profile groups",
         "response_type": "code",
         # Applied to the runtime OAuth httpx client (token/userinfo calls).
+        # When AUTHELIA_INTERNAL_URL is set, these calls go over HTTP so SSL
+        # verification is moot; the flag is kept for correctness.
         "verify": settings.oidc_verify_ssl,
     }
 
@@ -89,9 +91,12 @@ def _register_oidc(settings: Any) -> None:
         client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
 
     # Pre-fetch the discovery document so we control SSL verification.
-    # If the OIDC provider is unreachable at startup (e.g. in CI without a
-    # real Authelia instance), fall back to ``server_metadata_url`` so the
-    # app can still start; Authlib will retry the fetch lazily on first use.
+    # ``settings.oidc_discovery_url`` uses AUTHELIA_INTERNAL_URL when
+    # available (HTTP on the Docker network), avoiding SSL certificate
+    # errors with self-signed Authelia certificates. If the OIDC provider
+    # is unreachable at startup (e.g. in CI without a real Authelia
+    # instance), fall back to ``server_metadata_url`` so the app can still
+    # start; Authlib will retry the fetch lazily on first use.
     register_kwargs: dict[str, Any] = {
         "name": "authelia",
         "client_id": settings.oidc_client_id,

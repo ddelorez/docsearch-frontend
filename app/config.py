@@ -20,15 +20,26 @@ class Settings(BaseSettings):
     )
 
     # ── OIDC / Authelia ──────────────────────────────────────────────────────
+    # Public-facing issuer URL (HTTPS). Used for browser-facing OIDC redirects
+    # and as the base for token/userinfo endpoints.
+    # e.g. "https://sgisearch.sgi01.local/authelia"
     oidc_issuer_url: str
+
     oidc_client_id: str
     oidc_client_secret: str
+
     # Whether to verify SSL certificates when contacting the OIDC provider.
     # Set to false when using self-signed certificates in internal environments.
     oidc_verify_ssl: bool = True
 
+    # Internal Docker-network URL for Authelia (HTTP, no TLS). Used for
+    # server-to-server OIDC discovery metadata fetches. When set, this
+    # bypasses SSL verification issues with self-signed certificates.
+    # e.g. "http://authelia:9091"
+    authelia_internal_url: str = ""
+
     # Public-facing URL for Authelia (used for browser redirects to the
-    # OIDC authorization endpoint).  Must be reachable from the user's browser,
+    # OIDC authorization endpoint). Must be reachable from the user's browser,
     # e.g. "https://sgisearch.sgi01.local/authelia".
     # If left empty, OIDC login redirects will point to the internal
     # Docker hostname and users will NOT see the login page.
@@ -41,6 +52,15 @@ class Settings(BaseSettings):
                 "AUTHELIA_PUBLIC_URL is not set. OIDC login redirects will "
                 "use the internal Docker hostname and will fail in production. "
                 "Set AUTHELIA_PUBLIC_URL=https://sgisearch.sgi01.local/authelia",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if not self.authelia_internal_url:
+            warnings.warn(
+                "AUTHELIA_INTERNAL_URL is not set. Server-to-server OIDC "
+                "discovery will use OIDC_ISSUER_URL (%s). If Authelia uses a "
+                "self-signed certificate, set AUTHELIA_INTERNAL_URL to the "
+                "internal Docker HTTP URL (e.g. http://authelia:9091).",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -62,8 +82,14 @@ class Settings(BaseSettings):
 
     @property
     def oidc_discovery_url(self) -> str:
-        """OpenID Connect discovery document URL."""
-        return f"{self.oidc_issuer_url}/.well-known/openid-configuration"
+        """OpenID Connect discovery document URL.
+
+        Uses the internal Docker URL when available to avoid SSL
+        certificate verification issues with self-signed certificates.
+        Falls back to the public issuer URL for external deployments.
+        """
+        base = self.authelia_internal_url or self.oidc_issuer_url
+        return f"{base}/.well-known/openid-configuration"
 
     @property
     def allowed_groups_list(self) -> list[str]:

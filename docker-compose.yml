@@ -21,6 +21,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    # Environment overrides (in addition to .env):
+    environment:
+      # Internal Docker URL for server-to-server OIDC discovery.
+      # Uses HTTP to avoid SSL certificate issues with self-signed Authelia certs.
+      - AUTHELIA_INTERNAL_URL=http://authelia:9091
 
   # ── Authelia Identity Provider ──────────────────────────────────────────────
   authelia:
@@ -31,9 +36,23 @@ services:
     # Authelia treats AUTHELIA_* env vars as config overrides which causes
     # "configuration environment variable not expected" warnings.
     volumes:
-      - ./authelia.yml:/config/configuration.yml:rw
-      - ./users_database.yml:/config/users_database.yml:rw
+      # Named volume persists users_database.yml and other config data
+      # across stack rebuilds (docker compose down && up --build).
+      - authelia-config:/config
+      # Overlay configuration.yml from the repo (read-only).
+      - ./authelia.yml:/config/configuration.yml:ro
       - authelia-data:/var/lib/authelia
+    # Ensure users_database.yml exists before Authelia starts.
+    # Authelia requires this file; on first run (or after a volume prune)
+    # we create an empty template so the service can boot.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -f /config/users_database.yml ]; then
+          printf '---\nusers: {}\n' > /config/users_database.yml
+        fi
+        exec /usr/local/bin/authelia --config /config/configuration.yml
     expose:
       - "9091"
     networks:
@@ -87,6 +106,7 @@ services:
 volumes:
   redis-data:
   authelia-data:
+  authelia-config:
 
 networks:
   internal:
