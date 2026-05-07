@@ -31,6 +31,16 @@ trap cleanup_tmp_venv EXIT
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
+# ── Ensure argon2-cffi is available for password hashing ─────────────────────
+if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
+    echo "[INFO] Installing argon2-cffi for password hashing..."
+    if ! python3 -m pip install argon2-cffi; then
+        echo "[ERROR] Failed to install argon2-cffi. Please install it manually: pip install argon2-cffi"
+        exit 1
+    fi
+    echo "[OK] argon2-cffi installed"
+fi
+
 # ── .env file setup ──────────────────────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
     cp .env.example "$ENV_FILE"
@@ -519,8 +529,7 @@ has_real_users() {
 
 argon2_hash_password() {
     # Hashes $1 using argon2id with authelia-matching parameters.
-    # Always creates a temporary virtual environment, installs argon2-cffi,
-    # generates the hash, then cleans up the venv.
+    # Installs argon2-cffi on the host if not available, then generates the hash.
     local password="$1"
 
     if ! command -v python3 >/dev/null 2>&1; then
@@ -528,30 +537,18 @@ argon2_hash_password() {
         return 1
     fi
 
-    # Create temporary venv
-    TMP_VENV_DIR=$(mktemp -d -t docsearch-argon2-venv.XXXXXX)
-    echo "[INFO] Temporary venv created at $TMP_VENV_DIR"
-
-    if ! python3 -m venv "$TMP_VENV_DIR" 2>/tmp/docsearch-venv-err.$$; then
-        echo "[ERROR] Failed to create Python venv. The 'venv' module may be missing."
-        echo "        On Debian/Ubuntu: sudo apt install python3-venv"
-        echo "        On Fedora/RHEL:   sudo dnf install python3-virtualenv"
-        if [ -s /tmp/docsearch-venv-err.$$ ]; then
-            sed 's/^/          /' /tmp/docsearch-venv-err.$$ 2>/dev/null
+    # Check if argon2-cffi is available
+    if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
+        echo "[INFO] Installing argon2-cffi on the host..."
+        if ! python3 -m pip install argon2-cffi; then
+            echo "[ERROR] Failed to install argon2-cffi. Please install it manually: pip install argon2-cffi"
+            return 1
         fi
-        rm -f /tmp/docsearch-venv-err.$$ 2>/dev/null
-        return 1
-    fi
-    rm -f /tmp/docsearch-venv-err.$$ 2>/dev/null
-
-    # Install argon2-cffi in the venv
-    if ! "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi; then
-        echo "[ERROR] Failed to install argon2-cffi in temporary venv."
-        return 1
+        echo "[OK] argon2-cffi installed"
     fi
 
-    # Generate the hash using the venv's Python
-    "$TMP_VENV_DIR/bin/python" - "$password" << 'PYEOF'
+    # Generate the hash
+    python3 - "$password" << 'PYEOF'
 import sys
 from argon2 import PasswordHasher
 ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
