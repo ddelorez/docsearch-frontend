@@ -51,16 +51,10 @@ oauth = OAuth()
 def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, Any]:
     """Fetch the OIDC discovery document, honouring the SSL-verify flag.
 
-    Authlib's ``client_kwargs["verify"]`` is only applied to the OAuth
-    token/userinfo HTTP client; it is NOT used for the discovery fetch
-    triggered by ``server_metadata_url``. When the OIDC provider is behind a
-    self-signed certificate (e.g. internal Authelia deployments), that
-    discovery request fails with ``CERTIFICATE_VERIFY_FAILED``.
-
-    To work around this we fetch the metadata ourselves with an httpx client
-    that respects ``verify_ssl`` and pass the resulting dict to Authlib via
-    ``server_metadata``, so it never has to perform the discovery request
-    itself.
+    When discovery_url points to the internal Authelia instance (http://authelia:9091),
+    we set ``X-Forwarded-Proto: https`` so that Authelia generates URLs with the
+    correct HTTPS scheme even though the transport is HTTP. This avoids the
+    "invalid X-Forwarded-Proto header value 'http'" error.
     """
     if not verify_ssl:
         logger.warning(
@@ -68,7 +62,10 @@ def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, An
             "This should only be used in internal/dev environments.",
             discovery_url,
         )
-    with httpx.Client(verify=verify_ssl, timeout=10.0) as client:
+    # Always tell Authelia the original request was HTTPS; this satisfies
+    # Authelia's OIDC requirement that the issuer URL uses HTTPS.
+    headers: dict[str, str] = {"X-Forwarded-Proto": "https"}
+    with httpx.Client(verify=verify_ssl, timeout=10.0, headers=headers) as client:
         response = client.get(discovery_url)
         response.raise_for_status()
         return response.json()
@@ -83,6 +80,11 @@ def _register_oidc(settings: Any) -> None:
         # verification is moot; the flag is kept for correctness.
         "verify": settings.oidc_verify_ssl,
     }
+
+    # Always send X-Forwarded-Proto: https so Authelia accepts the request.
+    # This is required even for internal Docker network requests where the
+    # transport is HTTP, because Authelia rejects X-Forwarded-Proto: http.
+    client_kwargs.setdefault("headers", {})["X-Forwarded-Proto"] = "https"
 
     # If a public Authelia URL is configured, override the authorization
     # endpoint so the browser is redirected to the externally reachable URL
@@ -107,6 +109,24 @@ def _register_oidc(settings: Any) -> None:
         register_kwargs["server_metadata"] = _fetch_server_metadata(
             settings.oidc_discovery_url, settings.oidc_verify_ssl
         )
+        # ── Internal endpoint rewriting ────────────────────────────────────
+        # The discovery fetch used X-Forwarded-Proto: https so Authelia returns
+        # HTTPS URLs for token/userinfo/jwks endpoints. We need those endpoints
+        # to be reachable on the internal Docker network (HTTP), so swap the
+        # scheme from https → http for the internal host.
+        md = register_kwargs["server_metadata"]
+        internal_host = "authelia:9091"
+        for key in [
+            "token_endpoint",
+            "userinfo_endpoint",
+            "jwks_uri",
+            "revocation_endpoint",
+            "introspection_endpoint",
+            "registration_endpoint",
+        ]:
+            if key in md:
+                md[key] = md[key].replace(f"https://{internal_host}", f"http://{internal_host}")
+        # Keep issuer as reported (HTTPS) — token's iss claim must match this.
     except Exception as exc:
         logger.warning(
             "Failed to pre-fetch OIDC discovery document from %s: %s. "

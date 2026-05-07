@@ -154,22 +154,37 @@ Fill in the generated values:
 |----------|-------------|
 | `AUTH_COOKIE_DOMAIN` | **Required.** Domain for auth cookies (e.g., `docsearch.example.com` or `127.0.0.1`). Must be a valid FQDN or IP address. |
 | `AUTHELIA_STORAGE_ENCRYPTION_KEY` | **Required in v4.38+.** 32+ character hex string for encrypting Authelia's local storage. |
-| `OIDC_ISSUER_URL` | Public-facing Authelia URL (HTTPS, e.g. `https://docsearch.example.com/authelia`). Used for browser redirects. |
-| `AUTHELIA_INTERNAL_URL` | Internal Docker-network URL for server-to-server OIDC discovery (e.g. `http://authelia:9091`). Avoids SSL errors with self-signed certs. |
-| `AUTHELIA_PUBLIC_URL` | Public URL for browser OIDC login redirects. Must match nginx proxy path. |
+| `OIDC_ISSUER_URL` | **Public-facing** Authelia base URL (HTTPS, e.g. `https://docsearch.example.com/authelia`). Used for browser redirects and as the issuer identifier in ID tokens. |
+| `AUTHELIA_INTERNAL_URL` | **Internal Docker network URL** for Authelia (HTTP, e.g. `http://authelia:9091`). Used for server-to-server OIDC discovery to avoid TLS errors with self-signed certs. **Required** in Docker Compose setups. |
+| `AUTHELIA_PUBLIC_URL` | Public URL for browser OIDC login redirects (e.g. `https://docsearch.example.com/authelia`). Must match the nginx proxy path. |
 | `OIDC_CLIENT_ID` | OIDC client ID: `docsearch-frontend` |
 | `OIDC_CLIENT_SECRET` | Plain text client secret from Step 3 |
-| `SESSION_SECRET` | 64 hex character session secret |
-| `OIDC_HMAC_SECRET` | 32+ character HMAC secret |
-| `SECRET_KEY` | FastAPI session signing key (random hex) |
-| `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
-| `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
+| `OIDC_VERIFY_SSL` | Set to `false` when using self-signed certificates. The frontend uses this flag for token/userinfo requests. |
 | `ADMIN_USERNAME` | File-based Authelia username (default: `admin`). Used by `generate-secrets.sh` to build `users_database.yml`. |
 | `ADMIN_PASSWORD` | **Required for file auth.** Plaintext password — auto-hashed to Argon2id by the script. |
 | `ADMIN_EMAIL` | Admin user email address. |
 | `ADMIN_DISPLAYNAME` | Admin user display name. |
+| `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
+| `SECRET_KEY` | FastAPI session signing key (random hex, >= 32 bytes) |
+| `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
 | `HOST` | `0.0.0.0` (bind to all interfaces) |
 | `PORT` | `8000` (container port) |
+
+---
+
+### Internal vs External URLs
+
+In Docker Compose, the frontend container communicates with Authelia over the internal Docker network (`http://authelia:9091`). This avoids TLS verification issues with self-signed certificates. Browsers, however, access Authelia via HTTPS through the nginx reverse proxy (e.g. `https://your-domain/authelia`).
+
+To support both paths:
+
+- **`OIDC_ISSUER_URL`** — public HTTPS base URL (e.g. `https://docsearch.example.com/authelia`). This becomes the *issuer* identifier in ID tokens and is used for browser redirects.
+- **`AUTHELIA_INTERNAL_URL`** — internal HTTP base URL (e.g. `http://authelia:9091`). The frontend uses this for OIDC discovery, token exchange, and userinfo calls.
+- **`AUTHELIA_PUBLIC_URL`** — also HTTPS, used to construct the login redirect (authorization endpoint). Typically the same as `OIDC_ISSUER_URL`.
+
+The frontend automatically sends the `X-Forwarded-Proto: https` header on all internal calls so that Authelia treats them as secure, satisfying its OIDC requirement that the issuer use HTTPS.
+
+**nginx configuration** already sets `X-Forwarded-Proto https` for the `/authelia/`, `/api/oidc/`, and `/.well-known/openid-configuration` locations to ensure browser-facing requests are also treated as HTTPS.
 
 ---
 
