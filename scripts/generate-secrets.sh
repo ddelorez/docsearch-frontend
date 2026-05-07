@@ -28,6 +28,22 @@ cleanup_tmp_venv() {
 }
 trap cleanup_tmp_venv EXIT
 
+# ── Handle stale users_database.yml directory early (Docker bind-mount artifact) ─
+USERS_FILE="users_database.yml"
+if [ -d "$USERS_FILE" ]; then
+    echo "[WARN] $USERS_FILE is a directory — removing before proceeding"
+    OWNER=$(stat -c '%U:%G' "$USERS_FILE" 2>/dev/null || echo 'unknown')
+    if rmdir "$USERS_FILE" 2>/dev/null; then
+        echo "[OK] Removed empty directory $USERS_FILE"
+    elif rm -rf "$USERS_FILE" 2>/dev/null; then
+        echo "[OK] Removed directory $USERS_FILE"
+    else
+        echo "[ERROR] Cannot remove directory $USERS_FILE (owned by: $OWNER)"
+        echo "        Try: sudo rm -rf $USERS_FILE  (then re-run this script)"
+        exit 1
+    fi
+fi
+
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
@@ -583,72 +599,48 @@ sed -i '/argon2id/d' "$ENV_FILE" 2>/dev/null || true
 # Apply defaults
 ADMIN_USER="${ADMIN_USER:-admin}"
 
-if [ "$FORCE_REGENERATE" = false ] && has_real_users; then
-    echo "[OK] users_database.yml already contains real user data (verified — skipping)"
-else
-    # Validate that a password is set
-    if [ -z "$ADMIN_PASS" ]; then
-        echo "[ERROR] ADMIN_PASSWORD is not set in .env (or still set to placeholder)."
-        echo "        Set a strong password in .env:"
-        echo "          ADMIN_PASSWORD=YourStrongPassword"
-        echo "        Then re-run this script. It will auto-hash the password to Argon2id."
-        exit 1
-    fi
-
-    ADMIN_EMAIL_VAL="${ADMIN_EMAIL_VAL:-${ADMIN_USER}@example.com}"
-    ADMIN_DISPLAY_VAL="${ADMIN_DISPLAY_VAL:-Administrator}"
-
-    if [ "$FORCE_REGENERATE" = true ] && has_real_users; then
-        echo "[INFO] --force: regenerating users_database.yml from .env values"
-    fi
-
-    # ── Hash the password ─────────────────────────────────────────────────────
-    echo "[INFO] Generating Argon2id hash for admin user password..."
-    ADMIN_HASH=$(argon2_hash_password "$ADMIN_PASS") || {
-        echo "[ERROR] Failed to generate Argon2id hash."
-        echo "        Ensure python3 is installed and try again."
-        echo "        Alternatively, install argon2-cffi: pip install argon2-cffi"
-        exit 1
-    }
-
-    if [ -z "$ADMIN_HASH" ]; then
-        echo "[ERROR] Argon2id hash output was empty."
-        exit 1
-    fi
-    echo "[OK] Argon2id hash generated"
-
-    # ── Ensure users_database.yml is a writable file (handle stale dirs/perms from prior runs) ─
-    if [ -d "$USERS_FILE" ]; then
-        # Docker creates a directory if a bind-mount target file doesn't exist on the host
-        echo "[WARN] $USERS_FILE is a directory (likely created by Docker bind mount)"
-        OWNER=$(stat -c '%U:%G' "$USERS_FILE" 2>/dev/null || echo 'unknown')
-        if rmdir "$USERS_FILE" 2>/dev/null; then
-            echo "[OK] Removed empty directory $USERS_FILE"
-        elif rm -rf "$USERS_FILE" 2>/dev/null; then
-            echo "[OK] Removed directory $USERS_FILE"
-        else
-            echo "[ERROR] Cannot remove directory $USERS_FILE (owned by: $OWNER)"
-            echo "        Try: sudo rm -rf $USERS_FILE  (then re-run this script)"
+    if [ "$FORCE_REGENERATE" = false ] && has_real_users; then
+        echo "[OK] users_database.yml already contains real user data (verified — skipping)"
+    else
+        # Validate that a password is set
+        if [ -z "$ADMIN_PASS" ]; then
+            echo "[ERROR] ADMIN_PASSWORD is not set in .env (or still set to placeholder)."
+            echo "        Set a strong password in .env:"
+            echo "          ADMIN_PASSWORD=YourStrongPassword"
+            echo "        Then re-run this script. It will auto-hash the password to Argon2id."
             exit 1
         fi
-    elif [ -f "$USERS_FILE" ]; then
-        if ! [ -w "$USERS_FILE" ]; then
-            echo "[WARN] $USERS_FILE is not writable by $(whoami) — attempting to fix permissions"
-            if chmod u+w "$USERS_FILE" 2>/dev/null; then
-                echo "[OK] Fixed permissions on $USERS_FILE"
-            else
-                # File likely owned by another user (root from prior sudo run, or container)
-                echo "[ERROR] Cannot make $USERS_FILE writable. Owned by: $(stat -c '%U:%G' "$USERS_FILE" 2>/dev/null || echo 'unknown')"
-                echo "        Try: sudo rm -f $USERS_FILE  (then re-run this script)"
-                exit 1
-            fi
-        fi
-        # Remove the existing file so the new one is written with current user's umask
-        rm -f "$USERS_FILE"
-    fi
 
-    # ── Write users_database.yml ────────────────────────────────────────────────
-    cat > "$USERS_FILE" << EOF
+        ADMIN_EMAIL_VAL="${ADMIN_EMAIL_VAL:-${ADMIN_USER}@example.com}"
+        ADMIN_DISPLAY_VAL="${ADMIN_DISPLAY_VAL:-Administrator}"
+
+        if [ "$FORCE_REGENERATE" = true ] && has_real_users; then
+            echo "[INFO] --force: regenerating users_database.yml from .env values"
+        fi
+
+        # ── Hash the password ─────────────────────────────────────────────────────
+        echo "[INFO] Generating Argon2id hash for admin user password..."
+        ADMIN_HASH=$(argon2_hash_password "$ADMIN_PASS") || {
+            echo "[ERROR] Failed to generate Argon2id hash."
+            echo "        Ensure python3 is installed and try again."
+            echo "        Alternatively, install argon2-cffi: pip install argon2-cffi"
+            exit 1
+        }
+
+        if [ -z "$ADMIN_HASH" ]; then
+            echo "[ERROR] Argon2id hash output was empty."
+            exit 1
+        fi
+        echo "[OK] Argon2id hash generated"
+
+        # ── Remove existing file if not forcing (we already handled directory at startup) ─
+        if [ -f "$USERS_FILE" ]; then
+            # Remove the existing file so the new one is written with current user's umask
+            rm -f "$USERS_FILE"
+        fi
+
+        # ── Write users_database.yml ────────────────────────────────────────────────
+        cat > "$USERS_FILE" << EOF
 # Authelia users database for file-based authentication (development only).
 #
 # Generated by scripts/generate-secrets.sh — do not edit manually.
