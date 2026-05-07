@@ -194,6 +194,16 @@ AUTHELIA_SESSION_DOMAIN=$(get_env AUTHELIA_SESSION_DOMAIN)
 if [ -z "$AUTHELIA_SESSION_DOMAIN" ]; then
     AUTHELIA_SESSION_DOMAIN="$COOKIE_DOMAIN"
     set_env "AUTHELIA_SESSION_DOMAIN" "$AUTHELIA_SESSION_DOMAIN"
+    echo "[INFO] AUTHELIA_SESSION_DOMAIN defaulted to: $AUTHELIA_SESSION_DOMAIN"
+else
+    echo "[OK] AUTHELIA_SESSION_DOMAIN: $AUTHELIA_SESSION_DOMAIN"
+fi
+
+# Warn if session domain looks wrong for Docker deployments
+if [ "$AUTHELIA_SESSION_DOMAIN" = "$COOKIE_DOMAIN" ] && [ "$COOKIE_DOMAIN" != "localhost" ] && [ "$COOKIE_DOMAIN" != "127.0.0.1" ]; then
+    echo "[INFO] AUTHELIA_SESSION_DOMAIN matches AUTH_COOKIE_DOMAIN."
+    echo "       For Docker Compose deployments, consider setting AUTHELIA_SESSION_DOMAIN=authelia"
+    echo "       so OIDC discovery works over the internal Docker network."
 fi
 
 # ── OIDC issuer URL ───────────────────────────────────────────────────────────
@@ -556,6 +566,17 @@ print(f"[OK] PEM key block scalar: {len(key.splitlines())} lines")
 PYEOF
 
 chmod 600 "$AUTHELIA_FILE"
+
+# ── Verify authelia.yml has no invalid keys ─────────────────────────────────
+echo ""
+echo "[INFO] Verifying authelia.yml contains only Authelia v4.38+ valid keys..."
+if grep -q "^  issuer:" "$AUTHELIA_FILE"; then
+    echo "[ERROR] authelia.yml contains invalid 'issuer' key (removed in v4.38+)"
+    echo "        This would cause Authelia to fail with 'configuration key not expected'"
+    exit 1
+fi
+echo "[OK] authelia.yml verified: no invalid config keys"
+echo ""
 
 # ── Manage users_database.yml from .env (file authentication backend) ──────────
 # This block ensures users_database.yml is populated so Authelia can start.
