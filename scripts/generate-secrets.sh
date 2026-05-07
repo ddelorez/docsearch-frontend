@@ -31,6 +31,14 @@ trap cleanup_tmp_venv EXIT
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
+# ── Check if Docker containers are running (bind-mounts can interfere) ────────
+if docker ps | grep -q docsearch; then
+    echo "[WARN] DocSearch containers appear to be running. Bind-mounts may interfere with file generation."
+    echo "        Consider stopping containers first: docker compose down"
+    echo "        Press Enter to continue anyway, or Ctrl+C to abort."
+    read -r || exit 1
+fi
+
 # ── Ensure argon2-cffi is available for password hashing ─────────────────────
 if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
     echo "[INFO] Installing argon2-cffi for password hashing..."
@@ -608,6 +616,36 @@ else
         exit 1
     fi
     echo "[OK] Argon2id hash generated"
+
+    # ── Ensure users_database.yml is a writable file (handle stale dirs/perms from prior runs) ─
+    if [ -d "$USERS_FILE" ]; then
+        # Docker creates a directory if a bind-mount target file doesn't exist on the host
+        echo "[WARN] $USERS_FILE is a directory (likely created by Docker bind mount)"
+        OWNER=$(stat -c '%U:%G' "$USERS_FILE" 2>/dev/null || echo 'unknown')
+        if rmdir "$USERS_FILE" 2>/dev/null; then
+            echo "[OK] Removed empty directory $USERS_FILE"
+        elif rm -rf "$USERS_FILE" 2>/dev/null; then
+            echo "[OK] Removed directory $USERS_FILE"
+        else
+            echo "[ERROR] Cannot remove directory $USERS_FILE (owned by: $OWNER)"
+            echo "        Try: sudo rm -rf $USERS_FILE  (then re-run this script)"
+            exit 1
+        fi
+    elif [ -f "$USERS_FILE" ]; then
+        if ! [ -w "$USERS_FILE" ]; then
+            echo "[WARN] $USERS_FILE is not writable by $(whoami) — attempting to fix permissions"
+            if chmod u+w "$USERS_FILE" 2>/dev/null; then
+                echo "[OK] Fixed permissions on $USERS_FILE"
+            else
+                # File likely owned by another user (root from prior sudo run, or container)
+                echo "[ERROR] Cannot make $USERS_FILE writable. Owned by: $(stat -c '%U:%G' "$USERS_FILE" 2>/dev/null || echo 'unknown')"
+                echo "        Try: sudo rm -f $USERS_FILE  (then re-run this script)"
+                exit 1
+            fi
+        fi
+        # Remove the existing file so the new one is written with current user's umask
+        rm -f "$USERS_FILE"
+    fi
 
     # ── Write users_database.yml ────────────────────────────────────────────────
     cat > "$USERS_FILE" << EOF
