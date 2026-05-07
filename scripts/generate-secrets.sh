@@ -34,8 +34,10 @@ echo ""
 # ── Ensure argon2-cffi is available for password hashing ─────────────────────
 if ! python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
     echo "[INFO] Installing argon2-cffi for password hashing..."
-    if ! python3 -m pip install argon2-cffi; then
-        echo "[ERROR] Failed to install argon2-cffi. Please install it manually: pip install argon2-cffi"
+    if ! python3 -m pip install --break-system-packages argon2-cffi; then
+        echo "[ERROR] Failed to install argon2-cffi."
+        echo "        Try installing manually with: pip install --break-system-packages argon2-cffi"
+        echo "        Or install the system package: sudo apt install python3-argon2 (note: may not be compatible)"
         exit 1
     fi
     echo "[OK] argon2-cffi installed"
