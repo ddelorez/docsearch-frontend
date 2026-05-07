@@ -458,7 +458,7 @@ default_redirection_url = f"https://{cookie_domain}/"
 oidc_callback_url       = f"https://{cookie_domain}/auth/callback"
 
 config = {
-    "server":                 {"address": "tcp://0.0.0.0:9091/"},
+    "server":                 {"address": "tcp://0.0.0.0:9091/authelia"},
     "log":                    {"level": "info", "format": "text"},
     "storage":                {"encryption_key": storage_key,
                                "local": {"path": "/var/lib/authelia/db.sqlite3"}},

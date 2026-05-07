@@ -24,8 +24,9 @@ services:
     # Environment overrides (in addition to .env):
     environment:
       # Internal Docker URL for server-to-server OIDC discovery.
-      # Uses HTTP to avoid SSL certificate issues with self-signed Authelia certs.
-      - AUTHELIA_INTERNAL_URL=http://authelia:9091
+      # Includes /authelia path because Authelia is configured with
+      # server.address tcp://0.0.0.0:9091/authelia (serves at /authelia/ path).
+      - AUTHELIA_INTERNAL_URL=http://authelia:9091/authelia
 
   # ── Authelia Identity Provider ──────────────────────────────────────────────
   authelia:

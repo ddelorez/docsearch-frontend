@@ -111,14 +111,13 @@ def _register_oidc(settings: Any) -> None:
     }
 
     # Determine the public authorization endpoint URL (used for browser redirects).
-    # Authelia's OIDC endpoints are at /api/oidc/... directly on the public domain —
-    # NOT under the /authelia/ path prefix (that prefix is only for the portal UI).
+    # Since Authelia is at /authelia/ path, OIDC endpoints are under /authelia/api/oidc/.
+    # Use authelia_public_url as the base (includes /authelia path prefix).
     if settings.authelia_public_url:
-        parsed_pub = urlparse(settings.authelia_public_url)
-        pub_base = f"{parsed_pub.scheme}://{parsed_pub.netloc}"
+        public_authorize_url = f"{settings.authelia_public_url.rstrip('/')}/api/oidc/authorization"
     else:
-        pub_base = public_base
-    public_authorize_url = f"{pub_base}/api/oidc/authorization"
+        # Fallback: derive from OIDC_ISSUER_URL (which should also include /authelia path)
+        public_authorize_url = f"{settings.oidc_issuer_url.rstrip('/')}/api/oidc/authorization"
 
     try:
         server_metadata = _fetch_server_metadata(
@@ -136,14 +135,17 @@ def _register_oidc(settings: Any) -> None:
 
         # ── Internal endpoint rewriting ────────────────────────────────────
         # Discovery was fetched with Host: <public domain>, so Authelia returns
-        # public HTTPS URLs, e.g. https://sgisearch.sgi01.local/api/oidc/token.
+        # public HTTPS URLs, e.g. https://sgisearch.sgi01.local/authelia/api/oidc/token.
         # Rewrite these to the internal HTTP URL so the frontend can reach them
         # over the Docker network without TLS issues:
-        #   http://authelia:9091/api/oidc/token
-        # authorization_endpoint is NOT rewritten — it must stay as the public
-        # URL because the user's browser needs to reach it.
-        if settings.authelia_internal_url:
-            internal_base = settings.authelia_internal_url.rstrip("/")
+        #   http://authelia:9091/authelia/api/oidc/token
+        #
+        # We replace the full public base (authelia_public_url, which includes
+        # the /authelia path) with the full internal base (authelia_internal_url,
+        # which also includes /authelia). This avoids double-path issues.
+        if settings.authelia_internal_url and settings.authelia_public_url:
+            search_base = settings.authelia_public_url.rstrip("/")   # https://sgisearch.sgi01.local/authelia
+            replace_base = settings.authelia_internal_url.rstrip("/")  # http://authelia:9091/authelia
             for key in [
                 "token_endpoint",
                 "userinfo_endpoint",
@@ -154,10 +156,10 @@ def _register_oidc(settings: Any) -> None:
             ]:
                 if key in server_metadata:
                     server_metadata[key] = server_metadata[key].replace(
-                        public_base, internal_base
+                        search_base, replace_base
                     )
             logger.debug(
-                "OIDC endpoints rewritten: %s → %s", public_base, internal_base
+                "OIDC endpoints rewritten: %s → %s", search_base, replace_base
             )
 
         register_kwargs["server_metadata"] = server_metadata

@@ -1,6 +1,6 @@
 ---
 server:
-  address: tcp://0.0.0.0:9091/
+  address: tcp://0.0.0.0:9091/authelia
 
 log:
   level: info
