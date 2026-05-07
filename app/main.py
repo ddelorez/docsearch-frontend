@@ -23,7 +23,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from authlib.integrations.starlette_client import OAuth
@@ -49,58 +48,19 @@ logger = logging.getLogger(__name__)
 oauth = OAuth()
 
 
-def _fetch_server_metadata(discovery_url: str, verify_ssl: bool, issuer_url: str = "") -> dict[str, Any]:
-    """Fetch the OIDC discovery document with correct Host and X-Forwarded-Proto headers.
-
-    When discovery_url points to the internal Authelia instance (http://authelia:9091),
-    Authelia uses both the Host header and X-Forwarded-Proto to form the issuer URL.
-    We must send:
-      - X-Forwarded-Proto: https  (so Authelia knows the external scheme is HTTPS)
-      - Host: <public domain>     (so Authelia forms https://<public domain>, which
-                                   matches the session cookie config domain)
-    Without the correct Host header, Authelia forms https://authelia:9091 which
-    matches no session cookie config and returns 500.
-    """
-    headers: dict[str, str] = {"X-Forwarded-Proto": "https"}
-
-    if issuer_url:
-        parsed = urlparse(issuer_url)
-        host = parsed.hostname  # e.g. "sgisearch.sgi01.local"
-        if host:
-            headers["Host"] = host
-            logger.debug("OIDC discovery: using Host header '%s'", host)
-
-    if not verify_ssl:
-        logger.warning(
-            "OIDC SSL verification is DISABLED for discovery fetch (%s). "
-            "This should only be used in internal/dev environments.",
-            discovery_url,
-        )
-    with httpx.Client(verify=verify_ssl, timeout=10.0, headers=headers) as client:
+def _fetch_server_metadata(discovery_url: str, verify_ssl: bool) -> dict[str, Any]:
+    """Fetch the OIDC discovery document."""
+    with httpx.Client(verify=verify_ssl, timeout=10.0) as client:
         response = client.get(discovery_url)
         response.raise_for_status()
         return response.json()
 
 
 def _register_oidc(settings: Any) -> None:
-    # Extract the public hostname for Host header overrides on internal calls.
-    # Authelia uses Host + X-Forwarded-Proto to form the issuer URL, which must
-    # match the session cookie domain configuration.
-    parsed_issuer = urlparse(settings.oidc_issuer_url)
-    issuer_host = parsed_issuer.hostname or ""          # e.g. "sgisearch.sgi01.local"
-    public_base = f"{parsed_issuer.scheme}://{parsed_issuer.netloc}"  # e.g. "https://sgisearch.sgi01.local"
-
     client_kwargs: dict[str, Any] = {
         "scope": "openid email profile groups",
         "response_type": "code",
         "verify": settings.oidc_verify_ssl,
-        # Set Host + X-Forwarded-Proto on all OAuth HTTP calls (token, userinfo).
-        # The internal Authelia URL is HTTP; these headers ensure Authelia
-        # treats the requests as coming from the public HTTPS domain.
-        "headers": {
-            "X-Forwarded-Proto": "https",
-            **({"Host": issuer_host} if issuer_host else {}),
-        },
     }
 
     register_kwargs: dict[str, Any] = {
@@ -112,61 +72,32 @@ def _register_oidc(settings: Any) -> None:
 
     # Determine the public authorization endpoint URL (used for browser redirects).
     # Since Authelia is at /authelia/ path, OIDC endpoints are under /authelia/api/oidc/.
-    # Use authelia_public_url as the base (includes /authelia path prefix).
     if settings.authelia_public_url:
         public_authorize_url = f"{settings.authelia_public_url.rstrip('/')}/api/oidc/authorization"
     else:
-        # Fallback: derive from OIDC_ISSUER_URL (which should also include /authelia path)
         public_authorize_url = f"{settings.oidc_issuer_url.rstrip('/')}/api/oidc/authorization"
 
     try:
         server_metadata = _fetch_server_metadata(
             settings.oidc_discovery_url,
             settings.oidc_verify_ssl,
-            settings.oidc_issuer_url,  # provides correct Host header
         )
 
-        # authorize_url MUST be a top-level register() kwarg, not inside
-        # client_kwargs. Use the value from the discovery doc if available,
-        # falling back to the constructed public URL.
+        logger.info(
+            "OIDC discovery fetched from %s — keys: %s",
+            settings.oidc_discovery_url,
+            list(server_metadata.keys()),
+        )
+
+        register_kwargs["server_metadata"] = server_metadata
         register_kwargs["authorize_url"] = (
             server_metadata.get("authorization_endpoint") or public_authorize_url
         )
 
-        # ── Internal endpoint rewriting ────────────────────────────────────
-        # Discovery was fetched with Host: <public domain>, so Authelia returns
-        # public HTTPS URLs, e.g. https://sgisearch.sgi01.local/authelia/api/oidc/token.
-        # Rewrite these to the internal HTTP URL so the frontend can reach them
-        # over the Docker network without TLS issues:
-        #   http://authelia:9091/authelia/api/oidc/token
-        #
-        # We replace the full public base (authelia_public_url, which includes
-        # the /authelia path) with the full internal base (authelia_internal_url,
-        # which also includes /authelia). This avoids double-path issues.
-        if settings.authelia_internal_url and settings.authelia_public_url:
-            search_base = settings.authelia_public_url.rstrip("/")   # https://sgisearch.sgi01.local/authelia
-            replace_base = settings.authelia_internal_url.rstrip("/")  # http://authelia:9091/authelia
-            for key in [
-                "token_endpoint",
-                "userinfo_endpoint",
-                "jwks_uri",
-                "revocation_endpoint",
-                "introspection_endpoint",
-                "registration_endpoint",
-            ]:
-                if key in server_metadata:
-                    server_metadata[key] = server_metadata[key].replace(
-                        search_base, replace_base
-                    )
-            logger.debug(
-                "OIDC endpoints rewritten: %s → %s", search_base, replace_base
-            )
-
-        register_kwargs["server_metadata"] = server_metadata
         logger.info(
-            "OIDC registered — authorize_url=%s, token_endpoint=%s",
+            "OIDC registered — authorize_url=%s token_endpoint=%s",
             register_kwargs["authorize_url"],
-            server_metadata.get("token_endpoint", "n/a"),
+            server_metadata.get("token_endpoint", "MISSING"),
         )
 
     except Exception as exc:
@@ -177,7 +108,6 @@ def _register_oidc(settings: Any) -> None:
             exc,
         )
         register_kwargs["server_metadata_url"] = settings.oidc_discovery_url
-        # Always set authorize_url so /login works even when lazy discovery fails.
         register_kwargs["authorize_url"] = public_authorize_url
 
     oauth.register(**register_kwargs)
@@ -317,7 +247,7 @@ async def auth_callback(request: Request) -> Response:
             {
                 "status_code": 401,
                 "title": "Authentication Failed",
-                "message": "Could not complete sign-in. Please try again.",
+                "message": f"Unable to complete authentication: {exc}",
                 "current_year": datetime.now().year,
             },
             status_code=401,

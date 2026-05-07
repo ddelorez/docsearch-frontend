@@ -71,6 +71,7 @@ identity_providers:
         response_types:
           - code
         token_endpoint_auth_method: client_secret_basic
+        consent_mode: implicit
 
 notifier:
   disable_startup_check: true

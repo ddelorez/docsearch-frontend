@@ -390,6 +390,38 @@ Common causes:
 - Ensure `OIDC_CLIENT_SECRET_HASH` is a valid BCrypt hash of `OIDC_CLIENT_SECRET`
 - Check redirect URIs in `authelia.yml` match the actual callback URL
 
+### "Could not perform consent" error
+
+This error occurs when Authelia's consent screen fails to complete. The OIDC client
+in `authelia.yml` is configured with `consent_mode: implicit`, which skips the
+consent screen entirely for this trusted internal application.
+
+If you see this error:
+
+1. **Verify `consent_mode: implicit` is set** in `authelia.yml` under
+   `identity_providers.oidc.clients[0]`:
+   ```yaml
+   clients:
+     - client_id: ${OIDC_CLIENT_ID}
+       # ... other fields ...
+       consent_mode: implicit
+   ```
+
+2. **Restart Authelia** to pick up the config change:
+   ```bash
+   docker compose restart authelia
+   ```
+
+3. **Clear the `authelia-data` volume** if the error persists (stale SQLite records
+   from prior failed flows may be causing the issue):
+   ```bash
+   docker compose down
+   docker volume rm docsearch-frontend_authelia-data
+   docker compose up -d
+   ```
+   > Warning: this resets all Authelia stored state (sessions, TOTP, WebAuthn).
+   > Since only file-based user auth is configured, no user data is lost.
+
 ### `docker system prune -a --volumes` removes data
 
 This command removes all unused volumes, which will delete:
@@ -441,6 +473,27 @@ docker compose up -d --remove-orphans
 ```
 
 > **Note:** `authelia.yml` contains embedded secrets and is gitignored. `users_database.yml` is also gitignored and managed by `generate-secrets.sh`. After pulling updates, verify both files are still correct and re-run `./scripts/generate-secrets.sh` if needed.
+
+### Updating Authelia Configuration on the Server
+
+When `authelia.example.yml` is updated (e.g., adding `consent_mode: implicit`), the
+live `authelia.yml` on the server must also be updated:
+
+1. **Option A — Re-run the secrets generation script** (if `authelia.example.yml` is the only change):
+   ```bash
+   ./scripts/generate-secrets.sh
+   ```
+   This regenerates `authelia.yml` from the updated template, preserving existing secrets in `.env`.
+
+2. **Option B — Manually edit `authelia.yml`** on the server:
+   Add the new field to the existing file without regenerating. After editing:
+   ```bash
+   docker compose restart authelia
+   ```
+
+> **Important:** `docker compose restart authelia` is sufficient when only `authelia.yml`
+> changes. A full rebuild (`docker compose up -d --build authelia`) is only needed
+> if the Authelia Docker image itself was updated.
 
 ---
 
