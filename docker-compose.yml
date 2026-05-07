@@ -56,7 +56,7 @@ users:
   CHANGE_ME_USERNAME:
     disabled: false
     displayname: 'CHANGE_ME - Set your display name'
-    password: 'CHANGE_ME_GENERATE_A_VALID_HASH'
+    password: 'CHANGE_ME_GENERATE_A_VALID_HASH_FOR_YOUR_USER'
     email: 'CHANGE_ME@example.com'
     groups:
       - 'admins'

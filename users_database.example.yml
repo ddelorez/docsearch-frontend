@@ -19,5 +19,4 @@ users:
     password: 'CHANGE_ME_GENERATE_A_VALID_HASH'
     email: 'CHANGE_ME@example.com'
     groups:
-      - 'admins'
-      - 'dev'
+      - 'CHANGE_ME_GROUP'
