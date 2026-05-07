@@ -84,16 +84,17 @@ def _fetch_server_metadata(discovery_url: str, verify_ssl: bool, issuer_url: str
 
 def _register_oidc(settings: Any) -> None:
     # Extract the public hostname for Host header overrides on internal calls.
-    # Required because Authelia uses Host + X-Forwarded-Proto to form the issuer
-    # URL, which must match the session cookie domain configuration.
+    # Authelia uses Host + X-Forwarded-Proto to form the issuer URL, which must
+    # match the session cookie domain configuration.
     parsed_issuer = urlparse(settings.oidc_issuer_url)
-    issuer_host = parsed_issuer.hostname or ""  # e.g. "sgisearch.sgi01.local"
+    issuer_host = parsed_issuer.hostname or ""          # e.g. "sgisearch.sgi01.local"
+    public_base = f"{parsed_issuer.scheme}://{parsed_issuer.netloc}"  # e.g. "https://sgisearch.sgi01.local"
 
     client_kwargs: dict[str, Any] = {
         "scope": "openid email profile groups",
         "response_type": "code",
         "verify": settings.oidc_verify_ssl,
-        # Set Host + X-Forwarded-Proto on all OAuth calls (token, userinfo).
+        # Set Host + X-Forwarded-Proto on all OAuth HTTP calls (token, userinfo).
         # The internal Authelia URL is HTTP; these headers ensure Authelia
         # treats the requests as coming from the public HTTPS domain.
         "headers": {
@@ -102,35 +103,46 @@ def _register_oidc(settings: Any) -> None:
         },
     }
 
-    # If a public Authelia URL is configured, override the authorization
-    # endpoint so the browser is redirected to the externally reachable URL
-    # instead of the internal Docker hostname.
-    if settings.authelia_public_url:
-        client_kwargs["authorize_url"] = f"{settings.authelia_public_url}/api/oidc/authorization"
-
     register_kwargs: dict[str, Any] = {
         "name": "authelia",
         "client_id": settings.oidc_client_id,
         "client_secret": settings.oidc_client_secret,
         "client_kwargs": client_kwargs,
     }
+
+    # Determine the public authorization endpoint URL (used for browser redirects).
+    # Authelia's OIDC endpoints are at /api/oidc/... directly on the public domain —
+    # NOT under the /authelia/ path prefix (that prefix is only for the portal UI).
+    if settings.authelia_public_url:
+        parsed_pub = urlparse(settings.authelia_public_url)
+        pub_base = f"{parsed_pub.scheme}://{parsed_pub.netloc}"
+    else:
+        pub_base = public_base
+    public_authorize_url = f"{pub_base}/api/oidc/authorization"
+
     try:
-        register_kwargs["server_metadata"] = _fetch_server_metadata(
+        server_metadata = _fetch_server_metadata(
             settings.oidc_discovery_url,
             settings.oidc_verify_ssl,
             settings.oidc_issuer_url,  # provides correct Host header
         )
 
+        # authorize_url MUST be a top-level register() kwarg, not inside
+        # client_kwargs. Use the value from the discovery doc if available,
+        # falling back to the constructed public URL.
+        register_kwargs["authorize_url"] = (
+            server_metadata.get("authorization_endpoint") or public_authorize_url
+        )
+
         # ── Internal endpoint rewriting ────────────────────────────────────
-        # Discovery was fetched with Host: <public domain>, so Authelia
-        # returns public HTTPS URLs, e.g.:
-        #   https://sgisearch.sgi01.local/api/oidc/token
-        # Rewrite these to the internal HTTP URL so the frontend can reach
-        # them over the Docker network without TLS issues:
+        # Discovery was fetched with Host: <public domain>, so Authelia returns
+        # public HTTPS URLs, e.g. https://sgisearch.sgi01.local/api/oidc/token.
+        # Rewrite these to the internal HTTP URL so the frontend can reach them
+        # over the Docker network without TLS issues:
         #   http://authelia:9091/api/oidc/token
+        # authorization_endpoint is NOT rewritten — it must stay as the public
+        # URL because the user's browser needs to reach it.
         if settings.authelia_internal_url:
-            md = register_kwargs["server_metadata"]
-            public_base = f"{parsed_issuer.scheme}://{parsed_issuer.netloc}"
             internal_base = settings.authelia_internal_url.rstrip("/")
             for key in [
                 "token_endpoint",
@@ -140,11 +152,20 @@ def _register_oidc(settings: Any) -> None:
                 "introspection_endpoint",
                 "registration_endpoint",
             ]:
-                if key in md:
-                    md[key] = md[key].replace(public_base, internal_base)
+                if key in server_metadata:
+                    server_metadata[key] = server_metadata[key].replace(
+                        public_base, internal_base
+                    )
             logger.debug(
                 "OIDC endpoints rewritten: %s → %s", public_base, internal_base
             )
+
+        register_kwargs["server_metadata"] = server_metadata
+        logger.info(
+            "OIDC registered — authorize_url=%s, token_endpoint=%s",
+            register_kwargs["authorize_url"],
+            server_metadata.get("token_endpoint", "n/a"),
+        )
 
     except Exception as exc:
         logger.warning(
@@ -154,6 +175,8 @@ def _register_oidc(settings: Any) -> None:
             exc,
         )
         register_kwargs["server_metadata_url"] = settings.oidc_discovery_url
+        # Always set authorize_url so /login works even when lazy discovery fails.
+        register_kwargs["authorize_url"] = public_authorize_url
 
     oauth.register(**register_kwargs)
 
