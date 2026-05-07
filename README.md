@@ -84,11 +84,16 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 This interactive script creates all required files:
 - `.env` with all secrets (session key, OIDC secrets, etc.)
 - `authelia.yml` (Authelia configuration)
-- `users_database.yml` (file-based dev user)
+- `users_database.yml` (file-based dev user with Argon2 password hash)
 - `oidc_key.pem` (RSA private key for OIDC)
 - `.oidc_client_secret_hash` (BCrypt hash for OIDC client, kept out of .env)
 
 The script will display any generated passwords for you to save.
+
+**Prerequisites:** The script requires Python packages `pyyaml` and `argon2-cffi` (for password hashing):
+```bash
+pip install pyyaml argon2-cffi
+```
 
 ---
 
