@@ -106,7 +106,7 @@ The script will:
 
 The script is **idempotent**: re-running it skips secrets and files that already have real values. Use `--force` to regenerate everything.
 
-> **Important:** Before running the script on a fresh checkout, set `ADMIN_PASSWORD_HASH` in your `.env` file with a pre-computed Argon2id hash. See [Step 5: Configure Authelia Authentication](#step-5-configure-authelia-authentication) below.
+> **Important:** Before running the script on a fresh checkout, set `ADMIN_PASSWORD` in your `.env` file with a strong password. The script will auto-hash it to Argon2id. See [Step 5: Configure Authelia Authentication](#step-5-configure-authelia-authentication) below.
 
 Or generate manually:
 
@@ -165,7 +165,7 @@ Fill in the generated values:
 | `RAG_SERVICE_URL` | Internal URL of RAG backend (e.g., `http://rag-01:8000`) |
 | `ALLOWED_AD_GROUPS` | Comma-separated AD groups, or empty for all users |
 | `ADMIN_USERNAME` | File-based Authelia username (default: `admin`). Used by `generate-secrets.sh` to build `users_database.yml`. |
-| `ADMIN_PASSWORD_HASH` | **Required for file auth.** Pre-computed Argon2id hash. See Step 5 for how to generate. |
+| `ADMIN_PASSWORD` | **Required for file auth.** Plaintext password — auto-hashed to Argon2id by the script. |
 | `ADMIN_EMAIL` | Admin user email address. |
 | `ADMIN_DISPLAYNAME` | Admin user display name. |
 | `HOST` | `0.0.0.0` (bind to all interfaces) |
@@ -177,36 +177,36 @@ Fill in the generated values:
 
 ### Option A: File-Based Users (Development / Small Deployments)
 
-The `generate-secrets.sh` script automatically creates `users_database.yml` from `.env` variables. You only need to provide an Argon2id password hash.
+The `generate-secrets.sh` script automatically creates `users_database.yml` from `.env` variables and hashes the password using Argon2id (no manual hash generation needed).
 
-1. **Generate a password hash:**
-
-   ```bash
-   docker run --rm authelia/authelia authelia crypto hash generate argon2 \
-     --password 'YourStrongPassword' --random-salt \
-     --iterations 3 --memory 65536 --parallelism 4
-   ```
-
-2. **Set admin variables in `.env`:**
+1. **Set admin variables in `.env`:**
 
    ```env
    ADMIN_USERNAME=admin
-   ADMIN_PASSWORD_HASH=$argon2id$v=19$m=65536,t=3,p=4$...   # paste the hash from step 1
+   ADMIN_PASSWORD=YourStrongPassword   # ← the script auto-hashes this
    ADMIN_EMAIL=admin@example.com
    ADMIN_DISPLAYNAME=Administrator
    ```
 
-3. **Run the script to generate `users_database.yml`:**
+2. **Run the script to generate `users_database.yml`:**
 
    ```bash
    ./scripts/generate-secrets.sh
    ```
 
-   The script validates that `ADMIN_PASSWORD_HASH` is a valid Argon2id hash and will fail with a clear error if it's missing or malformed.
+   The script will auto-hash the password to Argon2id. It tries `argon2-cffi` in system Python first (fast), and falls back to a temporary venv if needed (cleaned up automatically).
 
-4. **Adding additional users:**
+3. **Adding additional users:**
 
-   Edit `users_database.yml` directly (it is gitignored). Generate additional hashes with the same `docker run` command from step 1, then append user blocks:
+   Edit `users_database.yml` directly (it is gitignored). Generate additional hashes with:
+
+   ```bash
+   docker run --rm authelia/authelia authelia crypto hash generate argon2 \
+     --password 'NewUserPassword' --random-salt \
+     --iterations 3 --memory 65536 --parallelism 4
+   ```
+
+   Then append user blocks:
 
    ```yaml
    users:

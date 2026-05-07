@@ -16,6 +16,18 @@ for arg in "$@"; do
     esac
 done
 
+# ── Cleanup trap for temporary argon2 venv (if created) ──────────────────────
+TMP_VENV_DIR=""
+cleanup_tmp_venv() {
+    local rc=$?
+    if [ -n "${TMP_VENV_DIR:-}" ] && [ -d "${TMP_VENV_DIR:-}" ]; then
+        rm -rf "$TMP_VENV_DIR" 2>/dev/null || true
+        echo "[OK] Cleaned up temporary venv: $TMP_VENV_DIR"
+    fi
+    return $rc
+}
+trap cleanup_tmp_venv EXIT
+
 echo "Generating secrets for DocSearch Frontend..."
 echo ""
 
@@ -459,9 +471,14 @@ chmod 600 "$AUTHELIA_FILE"
 #
 # Sources (from .env):
 #   ADMIN_USERNAME       — Authelia username (default: admin)
-#   ADMIN_PASSWORD_HASH  — Pre-computed Argon2id hash (MUST start with $argon2id$)
+#   ADMIN_PASSWORD       — Plaintext password; auto-hashed to Argon2id by this script
 #   ADMIN_EMAIL          — User email
 #   ADMIN_DISPLAYNAME    — Display name
+#
+# Hashing strategy:
+#   1. Try system Python with argon2-cffi (fast, no temp files).
+#   2. Fall back to a temporary venv with pip-installed argon2-cffi.
+#   The temp venv (if created) is cleaned up by the EXIT trap at the top.
 #
 # Idempotency:
 #   - If users_database.yml already has real user data → skip entirely.
@@ -498,38 +515,73 @@ has_real_users() {
     return 1
 }
 
+argon2_hash_password() {
+    # Hashes $1 using argon2id with authelia-matching parameters.
+    # Tries system Python first; falls back to temp venv.
+    local password="$1"
+
+    # Fast path: system Python with argon2-cffi
+    if python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
+        python3 - "$password" << 'PYEOF'
+import sys
+from argon2 import PasswordHasher
+ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
+print(ph.hash(sys.argv[1]))
+PYEOF
+        return 0
+    fi
+
+    # Fallback: temporary venv
+    echo "[INFO] argon2-cffi not available in system Python — creating temporary venv"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[ERROR] python3 not found on PATH — required for Argon2 hashing."
+        return 1
+    fi
+
+    TMP_VENV_DIR=$(mktemp -d -t docsearch-argon2-venv.XXXXXX)
+    echo "[INFO] Temporary venv created at $TMP_VENV_DIR"
+
+    if ! python3 -m venv "$TMP_VENV_DIR" 2>/tmp/docsearch-venv-err.$$; then
+        echo "[ERROR] Failed to create Python venv. The 'venv' module may be missing."
+        echo "        On Debian/Ubuntu: sudo apt install python3-venv"
+        echo "        On Fedora/RHEL:   sudo dnf install python3-virtualenv"
+        if [ -s /tmp/docsearch-venv-err.$$ ]; then
+            sed 's/^/          /' /tmp/docsearch-venv-err.$$
+        fi
+        rm -f /tmp/docsearch-venv-err.$$
+        return 1
+    fi
+    rm -f /tmp/docsearch-venv-err.$$
+
+    "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi || return 1
+
+    "$TMP_VENV_DIR/bin/python" - "$password" << 'PYEOF'
+import sys
+from argon2 import PasswordHasher
+ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
+print(ph.hash(sys.argv[1]))
+PYEOF
+}
+
 # Read values from .env
 ADMIN_USER=$(get_env ADMIN_USERNAME)
-ADMIN_HASH=$(get_env ADMIN_PASSWORD_HASH)
+ADMIN_PASS=$(get_env ADMIN_PASSWORD)
 ADMIN_EMAIL_VAL=$(get_env ADMIN_EMAIL)
 ADMIN_DISPLAY_VAL=$(get_env ADMIN_DISPLAYNAME)
 
-# Apply defaults for display name and email (username is needed first)
+# Apply defaults
 ADMIN_USER="${ADMIN_USER:-admin}"
 
 if [ "$FORCE_REGENERATE" = false ] && has_real_users; then
     echo "[OK] users_database.yml already contains real user data (verified — skipping)"
 else
-    # Validate the hash is present and looks like an Argon2id hash
-    if [ -z "$ADMIN_HASH" ]; then
-        echo "[ERROR] ADMIN_PASSWORD_HASH is not set in .env."
-        echo "        Generate a hash with:"
-        echo "          docker run --rm authelia/authelia authelia crypto hash generate argon2 \\"
-        echo "            --password 'YourStrongPassword' --random-salt \\"
-        echo "            --iterations 3 --memory 65536 --parallelism 4"
-        echo "        Then paste the hash into ADMIN_PASSWORD_HASH in your .env file"
-        echo "        and re-run this script."
-        exit 1
-    fi
-
-    if ! [[ "$ADMIN_HASH" =~ ^\$argon2id\$ ]]; then
-        echo "[ERROR] ADMIN_PASSWORD_HASH does not look like a valid Argon2id hash."
-        echo "        Expected format: \$argon2id\$v=19\$m=65536,t=3,p=4\$..."
-        echo "        Got: ${ADMIN_HASH:0:30}..."
-        echo "        Generate a compatible hash with:"
-        echo "          docker run --rm authelia/authelia authelia crypto hash generate argon2 \\"
-        echo "            --password 'YourStrongPassword' --random-salt \\"
-        echo "            --iterations 3 --memory 65536 --parallelism 4"
+    # Validate that a password is set
+    if [ -z "$ADMIN_PASS" ]; then
+        echo "[ERROR] ADMIN_PASSWORD is not set in .env (or still set to placeholder)."
+        echo "        Set a strong password in .env:"
+        echo "          ADMIN_PASSWORD=YourStrongPassword"
+        echo "        Then re-run this script. It will auto-hash the password to Argon2id."
         exit 1
     fi
 
@@ -540,6 +592,22 @@ else
         echo "[INFO] --force: regenerating users_database.yml from .env values"
     fi
 
+    # ── Hash the password ─────────────────────────────────────────────────────
+    echo "[INFO] Generating Argon2id hash for admin user password..."
+    ADMIN_HASH=$(argon2_hash_password "$ADMIN_PASS") || {
+        echo "[ERROR] Failed to generate Argon2id hash."
+        echo "        Ensure python3 is installed and try again."
+        echo "        Alternatively, install argon2-cffi: pip install argon2-cffi"
+        exit 1
+    }
+
+    if [ -z "$ADMIN_HASH" ]; then
+        echo "[ERROR] Argon2id hash output was empty."
+        exit 1
+    fi
+    echo "[OK] Argon2id hash generated"
+
+    # ── Write users_database.yml ────────────────────────────────────────────────
     cat > "$USERS_FILE" << EOF
 # Authelia users database for file-based authentication (development only).
 #
@@ -548,7 +616,8 @@ else
 # authelia.yml instead and remove this file.
 #
 # ── To add additional users ──────────────────────────────────────────────────
-# Generate a new Argon2id hash:
+# Run generate-secrets.sh with a new username/password set, or generate a
+# hash manually:
 #   docker run --rm authelia/authelia authelia crypto hash generate argon2 \\
 #     --password 'NewUserPassword' --random-salt \\
 #     --iterations 3 --memory 65536 --parallelism 4
