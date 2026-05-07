@@ -576,7 +576,9 @@ ADMIN_DISPLAY_VAL=$(get_env ADMIN_DISPLAYNAME)
 # there — the hash lives in users_database.yml only).  Leaving it in .env causes
 # Docker Compose to interpret $argon2id$, $v, $m, etc. as undefined variables,
 # producing WARN[0000] spam on every compose operation.
-sed -i '/^ADMIN_PASSWORD_HASH=/d' "$ENV_FILE" 2>/dev/null || true
+# Catch: (a) lines with leading whitespace, (b) any leftover $argon2id anywhere.
+sed -i '/^[[:space:]]*ADMIN_PASSWORD_HASH[[:space:]]*=/d' "$ENV_FILE" 2>/dev/null || true
+sed -i '/argon2id/d' "$ENV_FILE" 2>/dev/null || true
 
 # Apply defaults
 ADMIN_USER="${ADMIN_USER:-admin}"

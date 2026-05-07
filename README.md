@@ -92,7 +92,7 @@ Before running `generate-secrets.sh`, set these variables in `.env` (or edit the
 ```env
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=YourStrongPassword   # ← plaintext; the script auto-hashes to Argon2id
-ADMIN_EMAIL=ddelorez@sginterests.com
+ADMIN_EMAIL=admin@example.com
 ADMIN_DISPLAYNAME=Administrator
 ```
 
@@ -355,3 +355,4 @@ Planned enhancements:
 | Dark mode not persisting | localStorage blocked | Check browser privacy settings |
 | Authelia container stuck | Redis not ready | Wait for `redis` healthcheck to pass |
 | `users: non zero value required` | `users_database.yml` missing, empty, or still the repo placeholder | Set `ADMIN_PASSWORD` in `.env` with a strong password, then run `./scripts/generate-secrets.sh` |
+| `WARN[0000] The "argon2id" variable is not set` | Stale `ADMIN_PASSWORD_HASH=$argon2id$...` in `.env` from an earlier setup approach | Run `./scripts/generate-secrets.sh` (it auto-removes this line). Or manually: `sed -i '/argon2id/d' .env` |
