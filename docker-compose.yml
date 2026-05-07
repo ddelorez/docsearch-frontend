@@ -50,9 +50,9 @@ services:
       - -c
       - |
         if [ ! -f /config/users_database.yml ]; then
-          printf '---\nusers: {}\n' > /config/users_database.yml
+          printf '---\\nusers: {}\\n' > /config/users_database.yml
         fi
-        exec /usr/local/bin/authelia --config /config/configuration.yml
+        exec authelia --config /config/configuration.yml
     expose:
       - "9091"
     networks:
