@@ -519,28 +519,16 @@ has_real_users() {
 
 argon2_hash_password() {
     # Hashes $1 using argon2id with authelia-matching parameters.
-    # Tries system Python first; falls back to temp venv.
+    # Always creates a temporary virtual environment, installs argon2-cffi,
+    # generates the hash, then cleans up the venv.
     local password="$1"
-
-    # Fast path: system Python with argon2-cffi
-    if python3 -c "from argon2 import PasswordHasher" 2>/dev/null; then
-        python3 - "$password" << 'PYEOF'
-import sys
-from argon2 import PasswordHasher
-ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
-print(ph.hash(sys.argv[1]))
-PYEOF
-        return 0
-    fi
-
-    # Fallback: temporary venv
-    echo "[INFO] argon2-cffi not available in system Python — creating temporary venv"
 
     if ! command -v python3 >/dev/null 2>&1; then
         echo "[ERROR] python3 not found on PATH — required for Argon2 hashing."
         return 1
     fi
 
+    # Create temporary venv
     TMP_VENV_DIR=$(mktemp -d -t docsearch-argon2-venv.XXXXXX)
     echo "[INFO] Temporary venv created at $TMP_VENV_DIR"
 
@@ -549,15 +537,20 @@ PYEOF
         echo "        On Debian/Ubuntu: sudo apt install python3-venv"
         echo "        On Fedora/RHEL:   sudo dnf install python3-virtualenv"
         if [ -s /tmp/docsearch-venv-err.$$ ]; then
-            sed 's/^/          /' /tmp/docsearch-venv-err.$$
+            sed 's/^/          /' /tmp/docsearch-venv-err.$$ 2>/dev/null
         fi
-        rm -f /tmp/docsearch-venv-err.$$
+        rm -f /tmp/docsearch-venv-err.$$ 2>/dev/null
         return 1
     fi
-    rm -f /tmp/docsearch-venv-err.$$
+    rm -f /tmp/docsearch-venv-err.$$ 2>/dev/null
 
-    "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi || return 1
+    # Install argon2-cffi in the venv
+    if ! "$TMP_VENV_DIR/bin/pip" install --quiet argon2-cffi; then
+        echo "[ERROR] Failed to install argon2-cffi in temporary venv."
+        return 1
+    fi
 
+    # Generate the hash using the venv's Python
     "$TMP_VENV_DIR/bin/python" - "$password" << 'PYEOF'
 import sys
 from argon2 import PasswordHasher
